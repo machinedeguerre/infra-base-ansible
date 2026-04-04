@@ -5,6 +5,11 @@ version: 1.0.0
 
 description: Base Ansible collection for infrastructure provisioning.
 
+authors:
+  - Machine de Guerre
+
+readme: README.md
+
 license:
   - MIT
 

@@ -1,0 +1,478 @@
+---
+- name: Calculate proxmox_lan_cidr from address and netmask
+  ansible.builtin.shell: >
+    python3 -c "import ipaddress; print(str(ipaddress.IPv4Network('{{ proxmox_lan_addr }}/{{ proxmox_lan_netmask }}', strict=False)))"
+  register: proxmox_lan_cidr_result
+  changed_when: false
+
+- name: Set proxmox_lan_cidr fact
+  ansible.builtin.set_fact:
+    proxmox_lan_cidr: "{{ proxmox_lan_cidr_result.stdout }}"
+
+- name: Remove old proxmox-lan bridge from /etc/network/interfaces
+  ansible.builtin.blockinfile:
+    path: /etc/network/interfaces
+    marker: "# {mark} ANSIBLE proxmox-lan"
+    state: absent
+
+- name: Check if old proxmox-lan bridge interface exists
+  ansible.builtin.stat:
+    path: /sys/class/net/proxmox-lan
+  register: old_bridge_stat
+
+- name: Remove old proxmox-lan bridge interface from kernel
+  ansible.builtin.shell: |
+    ip link set proxmox-lan down 2>/dev/null || true
+    ip link del proxmox-lan 2>/dev/null || true
+  when: old_bridge_stat.stat.exists
+  changed_when: old_bridge_stat.stat.exists
+
+- name: Calculate dotted netmask from CIDR prefix
+  ansible.builtin.shell: >
+    python3 -c "import ipaddress; print(str(ipaddress.IPv4Network('0.0.0.0/{{ proxmox_lan_netmask }}').netmask))"
+  register: proxmox_lan_dotted_netmask_result
+  changed_when: false
+
+- name: Set dotted netmask fact
+  ansible.builtin.set_fact:
+    proxmox_lan_dotted_netmask: "{{ proxmox_lan_dotted_netmask_result.stdout }}"
+
+- name: Check if bridge is registered in Proxmox
+  ansible.builtin.command: pvesh get /nodes/{{ ansible_facts["hostname"] }}/network/{{ proxmox_lan_bridge }} --output-format json
+  register: pvesh_bridge_check
+  failed_when: false
+  changed_when: false
+
+- name: Register bridge in Proxmox via API
+  ansible.builtin.command: >
+    pvesh create /nodes/{{ ansible_facts["hostname"] }}/network
+    --iface {{ proxmox_lan_bridge }}
+    --type bridge
+    --address {{ proxmox_lan_addr }}
+    --netmask {{ proxmox_lan_dotted_netmask }}
+    --autostart 1
+  when: pvesh_bridge_check.rc != 0
+
+- name: Apply Proxmox network changes
+  ansible.builtin.command: pvesh set /nodes/{{ ansible_facts["hostname"] }}/network
+  when: pvesh_bridge_check.rc != 0
+
+- name: Ensure bridge interface is up
+  ansible.builtin.command: ifup {{ proxmox_lan_bridge }}
+  failed_when: false
+  changed_when: false
+  register: bridge_up_result
+
+- name: Activate bridge interface if not already up
+  ansible.builtin.command: ifup {{ proxmox_lan_bridge }}
+  when: bridge_up_result.rc != 0
+  changed_when: bridge_up_result.rc != 0
+
+- name: Activate IPv4 forwarding (persistent via sysctl.d)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-proxmox-ip-forward.conf
+    content: |
+      # Managed by Ansible (proxmox role)
+      net.ipv4.ip_forward = 1
+    mode: "0644"
+  register: sysctl_d_change
+
+- name: Remove legacy ip_forward line from sysctl.conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^net\.ipv4\.ip_forward\s*='
+    state: absent
+
+- name: Apply sysctl settings
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+- name: Compute remote subnets from nebula_unsafe_routes (filter out own host)
+  ansible.builtin.set_fact:
+    _proxmox_remote_subnets: "{{ nebula_unsafe_routes | default([]) | selectattr('via', 'ne', nebula_ip | default('')) | list }}"
+
+- name: Check if tun0 interface exists
+  ansible.builtin.stat:
+    path: /sys/class/net/tun0
+  register: nebula0_interface_stat
+
+- name: Check if route from Nebula network to local subnet exists
+  ansible.builtin.command: ip route show {{ proxmox_lan_cidr }} dev {{ proxmox_lan_bridge }}
+  register: route_vm_subnet_check
+  failed_when: false
+  changed_when: false
+  when: nebula0_interface_stat.stat.exists
+
+- name: Add route from Nebula network to local subnet (via bridge)
+  ansible.builtin.command: >
+    ip route add {{ proxmox_lan_cidr }} dev {{ proxmox_lan_bridge }}
+  failed_when: false
+  changed_when: nebula0_interface_stat.stat.exists and route_vm_subnet_check.rc != 0
+  when:
+    - nebula0_interface_stat.stat.exists
+    - route_vm_subnet_check.rc != 0
+
+- name: Check if route from local subnet to Nebula network exists
+  ansible.builtin.command: ip route show {{ proxmox_nebula_network }} dev tun0
+  register: route_nebula_check
+  failed_when: false
+  changed_when: false
+  when: nebula0_interface_stat.stat.exists
+
+- name: Add route from local subnet to Nebula network (via tun0)
+  ansible.builtin.command: >
+    ip route add {{ proxmox_nebula_network }} dev tun0
+  failed_when: false
+  changed_when: nebula0_interface_stat.stat.exists and route_nebula_check.rc != 0
+  when:
+    - nebula0_interface_stat.stat.exists
+    - route_nebula_check.rc != 0
+
+- name: Check if routes for remote subnets exist
+  ansible.builtin.command: ip route show {{ item.route }} via {{ item.via }} dev tun0
+  register: route_remote_check
+  failed_when: false
+  changed_when: false
+  when:
+    - nebula0_interface_stat.stat.exists
+    - _proxmox_remote_subnets | length > 0
+  loop: "{{ _proxmox_remote_subnets }}"
+  loop_control:
+    label: "{{ item.route }} via {{ item.via }}"
+
+- name: Add routes for remote subnets via Nebula
+  ansible.builtin.command: >
+    ip route add {{ item.route }} via {{ item.via }} dev tun0
+  failed_when: false
+  changed_when: >
+    nebula0_interface_stat.stat.exists and
+    route_remote_check.results[ansible_loop.index0].rc != 0
+  when:
+    - nebula0_interface_stat.stat.exists
+    - _proxmox_remote_subnets | length > 0
+    - route_remote_check.results[ansible_loop.index0].rc != 0
+  loop: "{{ _proxmox_remote_subnets }}"
+  loop_control:
+    label: "{{ item.route }} via {{ item.via }}"
+    extended: true
+
+# --- WireGuard policy-based routing (table 100) ---
+# When proxmox_wan_is_wireguard is true, VM internet traffic is routed via the
+# WireGuard tunnel using a separate routing table (table 100) and ip rules.
+# This is needed because the host's default route typically does NOT go via
+# the WireGuard tunnel, so VM traffic must be policy-routed there.
+#
+# When proxmox_wan_is_wireguard is false (physical interface like eno1), VM traffic
+# follows the host's main routing table out via the default gateway. No separate
+# routing table is needed — just NAT masquerading (configured in firewall.yml).
+
+# --- Cleanup: remove WireGuard routing artifacts when not using WireGuard ---
+# If the host previously used WireGuard mode, these artifacts must be removed
+# so they don't interfere with normal routing or break service startups.
+
+- name: Remove old policy-based routing script (if-up.d)
+  ansible.builtin.file:
+    path: /etc/network/if-up.d/proxmox-vm-routing
+    state: absent
+  when: not (proxmox_wan_is_wireguard | bool)
+
+- name: Remove old proxmox-vm-routing systemd service
+  ansible.builtin.file:
+    path: /etc/systemd/system/proxmox-vm-routing.service
+    state: absent
+  register: cleanup_routing_service
+  when: not (proxmox_wan_is_wireguard | bool)
+
+- name: Disable proxmox-vm-routing service if it was active
+  ansible.builtin.systemd:
+    name: proxmox-vm-routing.service
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  failed_when: false
+  when:
+    - not (proxmox_wan_is_wireguard | bool)
+    - cleanup_routing_service.changed | default(false)
+
+- name: Remove old wg-quick drop-in for proxmox-vm-routing
+  ansible.builtin.file:
+    path: "/etc/systemd/system/wg-quick@{{ proxmox_wan_iface }}.service.d"
+    state: absent
+  when:
+    - not (proxmox_wan_is_wireguard | bool)
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+
+- name: Remove old nebula drop-in for proxmox-vm-routing
+  ansible.builtin.file:
+    path: /etc/systemd/system/nebula.service.d/proxmox-vm-routing.conf
+    state: absent
+  register: cleanup_nebula_dropin
+  when: not (proxmox_wan_is_wireguard | bool)
+
+- name: Remove nebula drop-in directory if empty
+  ansible.builtin.command: rmdir /etc/systemd/system/nebula.service.d
+  failed_when: false
+  changed_when: false
+  when:
+    - not (proxmox_wan_is_wireguard | bool)
+    - cleanup_nebula_dropin.changed | default(false)
+
+- name: Reload systemd after removing drop-ins
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not (proxmox_wan_is_wireguard | bool)
+    - (cleanup_routing_service.changed | default(false)) or (cleanup_nebula_dropin.changed | default(false))
+
+- name: Flush routing table 100 (cleanup old WireGuard routes)
+  ansible.builtin.command: ip route flush table 100
+  failed_when: false
+  changed_when: false
+  when: not (proxmox_wan_is_wireguard | bool)
+
+- name: Remove old ip rules for table 100 (cleanup)
+  ansible.builtin.shell: |
+    while ip rule del from {{ proxmox_lan_cidr }} iif {{ proxmox_lan_bridge }} lookup 100 2>/dev/null; do :; done
+    while ip rule del from {{ proxmox_lan_cidr }} lookup 100 2>/dev/null; do :; done
+  changed_when: false
+  when: not (proxmox_wan_is_wireguard | bool)
+
+# --- End cleanup ---
+
+- name: Check if proxmox_wan_iface exists
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ proxmox_wan_iface }}"
+  register: proxmox_wan_iface_stat
+  failed_when: false
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+
+- name: Wait for proxmox_wan_iface to be available
+  ansible.builtin.wait_for:
+    path: "/sys/class/net/{{ proxmox_wan_iface }}"
+    timeout: 30
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - not (proxmox_wan_iface_stat.stat.exists | default(false))
+
+- name: Re-check proxmox_wan_iface after wait
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ proxmox_wan_iface }}"
+  register: proxmox_wan_iface_stat
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+
+# Flush and rebuild routing table 100 to ensure correct state.
+# This is idempotent - running it multiple times produces the same result.
+- name: Flush routing table 100
+  ansible.builtin.command: ip route flush table 100
+  failed_when: false
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+- name: Add default route via proxmox_wan_iface to table 100
+  ansible.builtin.command: ip route add default dev {{ proxmox_wan_iface }} table 100
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+- name: Add Nebula route to table 100
+  ansible.builtin.command: ip route add {{ proxmox_nebula_network }} dev tun0 table 100
+  failed_when: false
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+    - nebula0_interface_stat.stat.exists
+
+- name: Add remote subnet routes to table 100
+  ansible.builtin.command: ip route add {{ item.route }} via {{ item.via }} dev tun0 table 100
+  failed_when: false
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+    - nebula0_interface_stat.stat.exists
+    - _proxmox_remote_subnets | length > 0
+  loop: "{{ _proxmox_remote_subnets }}"
+  loop_control:
+    label: "{{ item.route }} via {{ item.via }}"
+
+# Block private subnets from being routed via the WireGuard tunnel.
+# More specific routes (Nebula, remote VM subnets) added above take precedence.
+# The default route via the tunnel handles all public internet traffic.
+- name: Add blackhole routes for private subnets to table 100
+  ansible.builtin.command: "ip route add blackhole {{ item }} table 100"
+  failed_when: false
+  changed_when: false
+  loop:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+    - "127.0.0.0/8"
+    - "169.254.0.0/16"
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+# Ensure exactly one ip rule exists (clean up duplicates and old rules without iif)
+- name: Remove all existing ip rules for LAN bridge (with and without iif)
+  ansible.builtin.shell: |
+    while ip rule del from {{ proxmox_lan_cidr }} iif {{ proxmox_lan_bridge }} lookup 100 2>/dev/null; do :; done
+    while ip rule del from {{ proxmox_lan_cidr }} lookup 100 2>/dev/null; do :; done
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+- name: Add single ip rule for LAN bridge (iif restricts to forwarded VM traffic only)
+  ansible.builtin.command: ip rule add from {{ proxmox_lan_cidr }} iif {{ proxmox_lan_bridge }} lookup 100
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+- name: Make policy-based routing persistent for LAN bridge (if-up.d script)
+  ansible.builtin.template:
+    src: proxmox-vm-routing.sh.j2
+    dest: "/etc/network/if-up.d/proxmox-vm-routing"
+    mode: "0755"
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+# Create systemd service to ensure routes are set up after both interfaces are up
+# This handles the case where the WireGuard tunnel starts before tun0 (or vice versa)
+- name: Create systemd service for policy-based routing
+  ansible.builtin.template:
+    src: proxmox-vm-routing.service.j2
+    dest: "/etc/systemd/system/proxmox-vm-routing.service"
+    mode: "0644"
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+  notify: Reload systemd
+
+- name: Enable and start proxmox-vm-routing service
+  ansible.builtin.systemd:
+    name: proxmox-vm-routing.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+# Create a wg-quick drop-in that re-runs the routing script after the tunnel starts.
+# This is needed because kernel removes all routes via the tunnel from table 100 when
+# the interface goes down (e.g. during WireGuard restart via Ansible handler).
+- name: Create wg-quick drop-in directory
+  ansible.builtin.file:
+    path: "/etc/systemd/system/wg-quick@{{ proxmox_wan_iface }}.service.d"
+    state: directory
+    mode: "0755"
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+- name: Create wg-quick drop-in to rebuild routing table after interface up
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/wg-quick@{{ proxmox_wan_iface }}.service.d/proxmox-vm-routing.conf"
+    mode: "0644"
+    content: |
+      [Service]
+      ExecStartPost=/etc/network/if-up.d/proxmox-vm-routing
+  register: wg_dropin_result
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+# Create a nebula drop-in that re-runs the routing script after tun0 starts.
+# This is needed because kernel removes all routes via tun0 from table 100 when
+# the interface goes down (e.g. during Nebula restart via Ansible handler).
+- name: Create nebula drop-in directory
+  ansible.builtin.file:
+    path: "/etc/systemd/system/nebula.service.d"
+    state: directory
+    mode: "0755"
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+- name: Create nebula drop-in to rebuild routing table after tun0 up
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/nebula.service.d/proxmox-vm-routing.conf"
+    mode: "0644"
+    content: |
+      [Service]
+      # Nebula is Type=simple so ExecStartPost fires before tun0 is created.
+      # Wait up to 30s for tun0 to appear, then rebuild routing table.
+      ExecStartPost=/bin/sh -c 'i=0; while ! [ -d /sys/class/net/tun0 ] && [ $$i -lt 30 ]; do sleep 1; i=$$((i+1)); done; /etc/network/if-up.d/proxmox-vm-routing'
+  register: nebula_dropin_result
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+
+# Reload systemd immediately after drop-in creation so that any subsequent
+# service restart (e.g. Nebula handler) picks up the ExecStartPost.
+# This cannot wait for a handler at end-of-play because Nebula may restart before then.
+- name: Reload systemd daemon after drop-in changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)
+    - (wg_dropin_result is defined and wg_dropin_result.changed | default(false))
+      or (nebula_dropin_result is defined and nebula_dropin_result.changed | default(false))
+
+# Run the routing script at the end to ensure table 100 is correct right now.
+# This handles the case where Ansible runs but no service restart is triggered.
+- name: Ensure policy-based routing table 100 is up to date
+  ansible.builtin.command: /etc/network/if-up.d/proxmox-vm-routing
+  changed_when: false
+  when:
+    - proxmox_wan_is_wireguard | bool
+    - proxmox_wan_iface is defined
+    - proxmox_wan_iface | length > 0
+    - proxmox_wan_iface_stat.stat.exists | default(false)

@@ -1,0 +1,96 @@
+---
+- name: Determine architecture for nebula binary
+  ansible.builtin.set_fact:
+    nebula_arch: >-
+      {{
+        {
+          'x86_64': 'amd64',
+          'aarch64': 'arm64',
+          'armv7l': 'armv7',
+          'armv6l': 'armv6'
+        }[ansible_facts['architecture']] | default('amd64')
+      }}
+
+- name: Set nebula download URL
+  ansible.builtin.set_fact:
+    nebula_download_url: >-
+      https://github.com/slackhq/nebula/releases/download/v{{ nebula_version }}/nebula-linux-{{ nebula_arch }}.tar.gz
+
+- name: Check if nebula binary exists
+  ansible.builtin.stat:
+    path: /usr/local/bin/nebula
+  register: nebula_binary_stat
+
+- name: Check if nebula binary exists and get version
+  ansible.builtin.command: /usr/local/bin/nebula -version
+  register: nebula_version_check
+  failed_when: false
+  changed_when: false
+  when: nebula_binary_stat.stat.exists
+
+- name: Set fact if nebula needs installation
+  ansible.builtin.set_fact:
+    nebula_needs_install: >-
+      {{
+        not nebula_binary_stat.stat.exists or
+        nebula_version_check.rc != 0 or
+        (nebula_version_check.stdout is defined and nebula_version_check.stdout is not search(nebula_version))
+      }}
+
+- name: Create temporary directory for nebula installation
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "nebula-install-"
+  register: nebula_install_tmp
+  when: nebula_needs_install | bool
+
+- name: Download nebula binary archive
+  ansible.builtin.get_url:
+    url: "{{ nebula_download_url }}"
+    dest: "{{ nebula_install_tmp.path }}/nebula.tar.gz"
+    mode: "0644"
+    timeout: 30
+  when: 
+    - nebula_needs_install | bool
+    - nebula_install_tmp is defined
+
+- name: Extract nebula binary archive
+  ansible.builtin.unarchive:
+    src: "{{ nebula_install_tmp.path }}/nebula.tar.gz"
+    dest: "{{ nebula_install_tmp.path }}"
+    remote_src: true
+  when: 
+    - nebula_needs_install | bool
+    - nebula_install_tmp is defined
+
+- name: Install nebula binary
+  ansible.builtin.copy:
+    src: "{{ nebula_install_tmp.path }}/nebula"
+    dest: /usr/local/bin/nebula
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  when: 
+    - nebula_needs_install | bool
+    - nebula_install_tmp is defined
+
+- name: Install nebula-cert binary
+  ansible.builtin.copy:
+    src: "{{ nebula_install_tmp.path }}/nebula-cert"
+    dest: /usr/local/bin/nebula-cert
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  when: 
+    - nebula_needs_install | bool
+    - nebula_install_tmp is defined
+
+- name: Cleanup temporary directory
+  ansible.builtin.file:
+    path: "{{ nebula_install_tmp.path }}"
+    state: absent
+  when: 
+    - nebula_needs_install | bool
+    - nebula_install_tmp is defined

@@ -1,0 +1,8 @@
+- name: Ensure ansible user exists
+  ansible.builtin.include_tasks: user.yml
+
+- name: Install sudo and sudoers configuration
+  ansible.builtin.include_tasks: sudo.yml
+
+- name: Configure authorized keys
+  ansible.builtin.include_tasks: authorized_keys.yml

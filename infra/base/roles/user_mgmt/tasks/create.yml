@@ -1,0 +1,20 @@
+---
+- name: "Create primary group"
+  ansible.builtin.group:
+    name: "{{ item.username }}"
+    gid: "{{ item.uid }}"
+    state: present
+  when: item.uid is defined
+  loop: "{{ user_mgmt_all_users }}"
+
+- name: "Create user"
+  ansible.builtin.user:
+    name: "{{ item.username }}"
+    uid: "{{ item.uid }}"
+    group: "{{ item.username }}"
+    home: "{{ user_mgmt_home_base }}/{{ item.username }}"
+    create_home: true
+    shell: "{{ user_mgmt_shell }}"
+    state: present
+  when: item.uid is defined
+  loop: "{{ user_mgmt_all_users }}"

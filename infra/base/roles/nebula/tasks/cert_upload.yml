@@ -1,0 +1,30 @@
+---
+# --- Upload cert/key (overwrite, no symlinks, no history) ---
+
+- name: Upload host cert (overwrite)
+  ansible.builtin.copy:
+    src: "{{ nebula_local_tmp.path }}/host.crt"
+    dest: "{{ nebula_pki_dir | default('/etc/nebula/pki') }}/host.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  when: nebula_rotate_needed | bool
+  notify: Restart nebula
+
+- name: Upload host key (overwrite)
+  ansible.builtin.copy:
+    src: "{{ nebula_local_tmp.path }}/host.key"
+    dest: "{{ nebula_pki_dir | default('/etc/nebula/pki') }}/host.key"
+    owner: root
+    group: root
+    mode: "0600"
+  when: nebula_rotate_needed | bool
+  notify: Restart nebula
+
+- name: Cleanup local temp dir (controller)
+  ansible.builtin.file:
+    path: "{{ nebula_local_tmp.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool

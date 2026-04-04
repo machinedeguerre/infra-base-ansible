@@ -1,0 +1,11 @@
+#SPDX-License-Identifier: MIT
+namespace: infra
+name: base
+version: 1.0.0
+
+description: Base Ansible collection for infrastructure provisioning.
+
+license:
+  - MIT
+
+dependencies: {}

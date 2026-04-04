@@ -1,0 +1,31 @@
+---
+- name: Setup user management
+  ansible.builtin.import_tasks: setup.yml
+
+- name: Default user (if not existing)
+  ansible.builtin.import_tasks: ensure_default_user.yml
+
+- name: Validate user definitions
+  ansible.builtin.import_tasks: validation.yml
+
+- name: Look up existing users
+  ansible.builtin.import_tasks: lookup.yml
+
+- name: Create users and groups
+  ansible.builtin.import_tasks: create.yml
+
+- name: Setup SSH directories
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Ensure authorized keys
+  ansible.builtin.include_tasks: ensure_authorized_keys.yml
+  loop: "{{ user_mgmt_all_users }}"
+  loop_control:
+    loop_var: _user_mgmt_user
+  when: _user_mgmt_user.authorized_keys_src is defined
+
+- name: Configure sudo
+  ansible.builtin.import_tasks: sudo.yml
+
+- name: Set root password
+  ansible.builtin.import_tasks: root_password.yml

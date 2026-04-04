@@ -1,0 +1,15 @@
+# Managed by Ansible (infra.base.sshd)
+# System-wide known_hosts
+
+{{ _ssh_known_hosts_base | trim }}
+
+{% for blob in (_ssh_known_hosts_extra_files_content | default([])) %}
+{{ blob | trim }}
+
+{% endfor %}
+{% if ssh_system_known_hosts_extra_lines | length > 0 %}
+# Extra lines (consumer-provided)
+{% for line in ssh_system_known_hosts_extra_lines %}
+{{ line }}
+{% endfor %}
+{% endif %}

@@ -1,0 +1,25 @@
+---
+# Default user – assumed to already exist from OS installation.
+# This role only manages authorized_keys and sudo for this user; the user is never created.
+user_mgmt_default_username: "user"
+user_mgmt_default_authorized_keys_src: "files/pubkeys/sysops.pubkeys"
+user_mgmt_default_sudo: true
+user_mgmt_default_passwordless_sudo: false
+
+# Additional users to create and manage.
+# Users with a uid defined will be created if they don't exist.
+# Each entry requires: username (str), sudo (bool), passwordless_sudo (bool).
+# Optional: uid (int) – if set the user and its primary group are created.
+# Optional: authorized_keys_src (str) – path to a public keys file
+#           (absolute, or relative to playbook_dir).
+# Example:
+#   user_mgmt_users:
+#     - username: "deploy"
+#       uid: 1100
+#       sudo: false
+#       passwordless_sudo: false
+#       authorized_keys_src: "files/pubkeys/deploy.pubkeys"
+user_mgmt_users: []
+
+user_mgmt_shell: "/bin/bash"
+user_mgmt_home_base: "/home"

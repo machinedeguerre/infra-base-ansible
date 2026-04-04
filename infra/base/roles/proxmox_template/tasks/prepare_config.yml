@@ -1,0 +1,290 @@
+---
+- name: Fail if ISO filename is not configured
+  ansible.builtin.fail:
+    msg: "proxmox_template_iso_filename must be set (e.g. 'debian-13.3.0-amd64-netinst.iso')"
+  when: proxmox_template_iso_filename is not defined or proxmox_template_iso_filename | length == 0
+
+- name: Verify ISO file exists on host
+  ansible.builtin.stat:
+    path: "{{ proxmox_template_iso_path }}/{{ proxmox_template_iso_filename }}"
+  register: proxmox_template_iso_stat
+
+- name: Fail if ISO file does not exist
+  ansible.builtin.fail:
+    msg: "ISO file not found: {{ proxmox_template_iso_path }}/{{ proxmox_template_iso_filename }}. Download it first via the proxmox role."
+  when: not proxmox_template_iso_stat.stat.exists
+
+- name: Check if token file exists
+  ansible.builtin.stat:
+    path: "{{ proxmox_template_api_token_file }}"
+  register: proxmox_template_token_file_stat
+
+- name: Fail if token file does not exist
+  ansible.builtin.fail:
+    msg: "Proxmox token file {{ proxmox_template_api_token_file }} does not exist. Run proxmox role first."
+  when: not proxmox_template_token_file_stat.stat.exists
+
+- name: Read encrypted token from host
+  ansible.builtin.slurp:
+    src: "{{ proxmox_template_api_token_file }}"
+  register: proxmox_template_encrypted_token
+  when: proxmox_template_token_file_stat.stat.exists
+
+- name: Fail if token secret is not defined
+  ansible.builtin.fail:
+    msg: "proxmox_token_secret must be defined in vault to decrypt token"
+  when:
+    - proxmox_template_token_file_stat.stat.exists
+    - proxmox_template_encrypted_token is succeeded
+    - proxmox_token_secret is not defined
+
+- name: Decrypt token locally
+  ansible.builtin.shell: |
+    echo "{{ proxmox_template_encrypted_token.content | b64decode }}" | openssl enc -aes-256-cbc -d -salt -pbkdf2 -base64 -pass pass:"{{ proxmox_token_secret }}"
+  register: proxmox_template_token_secret_part
+  delegate_to: localhost
+  become: false
+  no_log: true
+  changed_when: false
+  when:
+    - proxmox_template_token_file_stat.stat.exists
+    - proxmox_template_encrypted_token is succeeded
+    - proxmox_token_secret is defined
+
+- name: Fail if token decryption failed
+  ansible.builtin.fail:
+    msg: "Failed to decrypt Proxmox token. Check vault password and token file."
+  when:
+    - proxmox_template_token_file_stat.stat.exists
+    - proxmox_template_encrypted_token is succeeded
+    - proxmox_token_secret is defined
+    - proxmox_template_token_secret_part.rc != 0 or proxmox_template_token_secret_part.stdout | length == 0
+
+- name: Set fact for token secret part (trimmed, no newlines)
+  ansible.builtin.set_fact:
+    proxmox_template_token_secret_trimmed: "{{ proxmox_template_token_secret_part.stdout | trim | regex_replace('\\n', '') | regex_replace('\\r', '') }}"
+  when:
+    - proxmox_template_token_file_stat.stat.exists
+    - proxmox_template_token_secret_part is succeeded
+    - proxmox_template_token_secret_part.stdout is defined
+    - proxmox_template_token_secret_part.stdout | length > 0
+
+- name: Construct full token string (for API calls)
+  ansible.builtin.set_fact:
+    proxmox_template_decrypted_token: "{{ proxmox_template_api_user }}!{{ proxmox_template_api_token_id }}={{ proxmox_template_token_secret_trimmed }}"
+  when:
+    - proxmox_template_token_file_stat.stat.exists
+    - proxmox_template_token_secret_part is succeeded
+    - proxmox_template_token_secret_trimmed is defined
+    - proxmox_template_token_secret_trimmed | length > 0
+
+- name: Construct token for Packer (tokenid=secret format, username is set separately)
+  ansible.builtin.set_fact:
+    proxmox_template_packer_token: "{{ proxmox_template_api_token_id }}={{ proxmox_template_token_secret_trimmed }}"
+  when:
+    - proxmox_template_token_file_stat.stat.exists
+    - proxmox_template_token_secret_part is succeeded
+    - proxmox_template_token_secret_trimmed is defined
+    - proxmox_template_token_secret_trimmed | length > 0
+
+- name: Get IP address of the proxmox interface for Packer
+  ansible.builtin.shell: "ip -4 addr show {{ proxmox_template_interface }} | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'"
+  register: proxmox_template_api_ip_result
+  changed_when: false
+
+- name: Set fact for API IP
+  ansible.builtin.set_fact:
+    proxmox_template_api_ip: "{{ proxmox_template_api_ip_result.stdout }}"
+
+- name: Get IP address of the VM bridge for Packer HTTP server
+  ansible.builtin.shell: "ip -4 addr show {{ proxmox_template_network_bridge }} | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'"
+  register: proxmox_template_bridge_ip_result
+  changed_when: false
+
+- name: Set fact for bridge IP (used by Packer HTTP server)
+  ansible.builtin.set_fact:
+    proxmox_template_bridge_ip: "{{ proxmox_template_bridge_ip_result.stdout }}"
+
+- name: Set fact for Proxmox API IP (for template check and build)
+  ansible.builtin.set_fact:
+    proxmox_template_api_ip_build: "{{ proxmox_template_api_ip }}"
+  when: proxmox_template_api_ip is defined and proxmox_template_api_ip | length > 0
+
+- name: Check if template already exists in Proxmox
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_template_api_ip }}:{{ proxmox_template_api_port }}/api2/json/nodes/{{ proxmox_template_api_node }}/qemu"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_template_decrypted_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: proxmox_template_list
+  failed_when: false
+  when:
+    - proxmox_template_api_ip is defined
+    - proxmox_template_api_ip | length > 0
+    - proxmox_template_decrypted_token is defined
+    - proxmox_template_decrypted_token | length > 0
+
+- name: Set fact if template exists
+  ansible.builtin.set_fact:
+    proxmox_template_exists: >-
+      {{
+        proxmox_template_list.json.data | default([]) | 
+        selectattr('name', 'equalto', proxmox_template_name) | 
+        selectattr('template', 'equalto', 1) |
+        list | length > 0
+      }}
+  when:
+    - proxmox_template_list is succeeded
+    - proxmox_template_list.json is defined
+    - proxmox_template_list.json.data is defined
+
+- name: Set default template exists fact to false
+  ansible.builtin.set_fact:
+    proxmox_template_exists: false
+  when: proxmox_template_exists is not defined
+
+- name: Check if Packer configuration directory exists
+  ansible.builtin.stat:
+    path: /tmp/packer-config
+  register: proxmox_template_packer_dir_stat
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Create Packer configuration directory
+  ansible.builtin.file:
+    path: /tmp/packer-config
+    state: directory
+    mode: "0755"
+  when: not (proxmox_template_exists | default(false) | bool)
+  changed_when: not proxmox_template_packer_dir_stat.stat.exists
+
+- name: Check if SSH key already exists
+  ansible.builtin.stat:
+    path: /tmp/packer-config/packer_key
+  register: proxmox_template_ssh_key_stat
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Check if SSH public key already exists
+  ansible.builtin.stat:
+    path: /tmp/packer-config/packer_key.pub
+  register: proxmox_template_ssh_pubkey_stat
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Remove existing SSH keys if incomplete
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/packer-config/packer_key
+    - /tmp/packer-config/packer_key.pub
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - proxmox_template_ssh_key_stat.stat.exists != proxmox_template_ssh_pubkey_stat.stat.exists
+
+- name: Generate SSH key for Packer using ssh-keygen
+  ansible.builtin.shell: |
+    ssh-keygen -t rsa -b 2048 -f /tmp/packer-config/packer_key -N '' -C 'packer-build-key' -q
+  register: proxmox_template_ssh_key_gen
+  changed_when: proxmox_template_ssh_key_gen.rc == 0
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - not proxmox_template_ssh_key_stat.stat.exists or not proxmox_template_ssh_pubkey_stat.stat.exists
+
+- name: Re-check SSH key files after generation
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: proxmox_template_ssh_keys_final
+  loop:
+    - /tmp/packer-config/packer_key
+    - /tmp/packer-config/packer_key.pub
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Verify SSH key files exist
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_ssh_keys_final.results[0].stat.exists
+      - proxmox_template_ssh_keys_final.results[1].stat.exists
+    fail_msg: "SSH key files were not created successfully"
+    quiet: true
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set fact for SSH key file path
+  ansible.builtin.set_fact:
+    proxmox_template_ssh_key_file: "/tmp/packer-config/packer_key"
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Read SSH public key
+  ansible.builtin.slurp:
+    src: /tmp/packer-config/packer_key.pub
+  register: proxmox_template_ssh_public_key_content
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set fact for SSH public key
+  ansible.builtin.set_fact:
+    proxmox_template_ssh_public_key: "{{ proxmox_template_ssh_public_key_content.content | b64decode | trim }}"
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - proxmox_template_ssh_public_key_content is defined
+
+- name: Generate random temporary root password for preseed build
+  ansible.builtin.set_fact:
+    proxmox_template_preseed_root_password: "{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+  no_log: true
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Create temporary HTTP directory for preseed
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "packer-http-"
+  register: proxmox_template_http_dir
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set fact for HTTP directory
+  ansible.builtin.set_fact:
+    proxmox_template_http_directory: "{{ proxmox_template_http_dir.path }}"
+  when:
+    - proxmox_template_http_dir is defined
+    - proxmox_template_http_dir.path is defined
+
+- name: Set fact for cloud-init file path
+  ansible.builtin.set_fact:
+    proxmox_template_cloud_init_file: "/tmp/packer-config/cloud-init.yml"
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Generate Packer HCL configuration
+  ansible.builtin.template:
+    src: packer.pkr.hcl.j2
+    dest: /tmp/packer-config/packer.pkr.hcl
+    mode: "0644"
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Debug - Show token line from generated Packer config (first 50 chars)
+  ansible.builtin.shell: grep -E '^\s*token\s*=' /tmp/packer-config/packer.pkr.hcl | head -c 50
+  register: packer_token_line
+  changed_when: false
+  failed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Debug - Display token line preview
+  ansible.builtin.debug:
+    msg: "Token line in Packer config: {{ packer_token_line.stdout | default('NOT FOUND') }}"
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - packer_token_line is defined
+
+- name: Generate preseed file
+  ansible.builtin.template:
+    src: preseed.cfg.j2
+    dest: "{{ proxmox_template_http_directory }}/preseed.cfg"
+    mode: "0644"
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - proxmox_template_http_directory is defined
+
+- name: Generate cloud-init configuration
+  ansible.builtin.template:
+    src: cloud-init.yml.j2
+    dest: /tmp/packer-config/cloud-init.yml
+    mode: "0644"
+  when: not (proxmox_template_exists | default(false) | bool)

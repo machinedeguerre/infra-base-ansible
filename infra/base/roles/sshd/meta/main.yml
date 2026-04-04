@@ -1,0 +1,6 @@
+galaxy_info:
+  role_name: sshd
+  description: Harden OpenSSH server and manage system-wide known_hosts
+  license: MIT
+  min_ansible_version: "2.20"
+dependencies: []

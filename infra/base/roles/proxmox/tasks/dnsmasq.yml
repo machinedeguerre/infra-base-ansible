@@ -1,0 +1,39 @@
+---
+- name: Remove old dnsmasq config for proxmox-lan bridge
+  ansible.builtin.file:
+    path: /etc/dnsmasq.d/proxmox-lan.conf
+    state: absent
+  notify: Restart dnsmasq
+
+- name: Check if bridge interface exists
+  ansible.builtin.stat:
+    path: /sys/class/net/{{ proxmox_lan_bridge }}
+  register: bridge_interface_stat
+
+- name: Wait for bridge interface to be available
+  ansible.builtin.wait_for:
+    path: /sys/class/net/{{ proxmox_lan_bridge }}
+    timeout: 30
+  when: not bridge_interface_stat.stat.exists
+
+- name: "dnsmasq config for {{ proxmox_lan_bridge }}"
+  ansible.builtin.copy:
+    dest: "/etc/dnsmasq.d/{{ proxmox_lan_bridge }}.conf"
+    mode: "0644"
+    content: |
+      interface={{ proxmox_lan_bridge }}
+      bind-interfaces
+      listen-address={{ proxmox_lan_addr }}
+      dhcp-range={{ proxmox_dhcp_range_start }},{{ proxmox_dhcp_range_end }},255.255.255.0,12h
+      dhcp-option=option:router,{{ proxmox_lan_addr }}
+      dhcp-option=option:dns-server,{{ proxmox_lan_addr }}
+      dhcp-authoritative
+      no-resolv
+      server=127.0.0.53
+  notify: Restart dnsmasq
+
+- name: Run dnsmasq
+  ansible.builtin.service:
+    name: dnsmasq
+    state: started
+    enabled: true

@@ -1,0 +1,11 @@
+---
+- name: Ensure directories (remote)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ nebula_dir | default('/etc/nebula') }}"
+    - "{{ nebula_pki_dir | default('/etc/nebula/pki') }}"

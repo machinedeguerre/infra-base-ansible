@@ -1,0 +1,21 @@
+---
+- name: Ensure required network variables are set
+  ansible.builtin.assert:
+    that:
+      - proxmox_lan_addr is defined
+      - proxmox_lan_addr | length > 0
+      - proxmox_lan_netmask is defined
+      - proxmox_lan_netmask | length > 0
+      - proxmox_wan_iface is defined
+      - proxmox_wan_iface | length > 0
+      - proxmox_dhcp_range_start is defined
+      - proxmox_dhcp_range_start | length > 0
+      - proxmox_dhcp_range_end is defined
+      - proxmox_dhcp_range_end | length > 0
+    fail_msg: >-
+      Required network variables must be set per host:
+      - proxmox_lan_addr
+      - proxmox_lan_netmask (CIDR format, e.g. "24")
+      - proxmox_wan_iface
+      - proxmox_dhcp_range_start
+      - proxmox_dhcp_range_end

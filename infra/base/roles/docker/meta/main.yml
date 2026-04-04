@@ -1,0 +1,6 @@
+galaxy_info:
+  description: Install Docker CE from Docker's official Debian repository
+  license: MIT
+  min_ansible_version: "2.20"
+dependencies:
+  - role: infra.base.user_mgmt

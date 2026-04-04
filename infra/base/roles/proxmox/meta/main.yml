@@ -1,0 +1,5 @@
+galaxy_info:
+  description: Install and configure Proxmox VE on Debian systems
+  license: MIT
+  min_ansible_version: "2.20"
+dependencies: []

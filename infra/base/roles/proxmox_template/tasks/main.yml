@@ -1,0 +1,12 @@
+---
+- name: Install Packer
+  ansible.builtin.import_tasks: install_packer.yml
+
+- name: Prepare configuration files
+  ansible.builtin.import_tasks: prepare_config.yml
+
+- name: Build template
+  ansible.builtin.import_tasks: build_template.yml
+
+- name: Configure cloud-init defaults on template
+  ansible.builtin.import_tasks: configure_cloud_init.yml

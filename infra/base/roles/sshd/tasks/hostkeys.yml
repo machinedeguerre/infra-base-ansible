@@ -1,0 +1,51 @@
+- name: Ensure /etc/ssh exists
+  ansible.builtin.file:
+    path: /etc/ssh
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write SSH host keys from vault variables
+  when: sshd_host_keys | length > 0
+  block:
+    - name: Validate host key items
+      ansible.builtin.assert:
+        that:
+          - host_key.type is defined
+          - host_key.private is defined
+          - host_key.public is defined
+          - host_key.type in ['ed25519', 'rsa', 'ecdsa']
+        fail_msg: "Each sshd_host_keys item must have type (ed25519|rsa|ecdsa), private, public"
+      loop: "{{ sshd_host_keys }}"
+      loop_control:
+        loop_var: host_key
+        label: "{{ host_key.type }}"
+      no_log: true
+
+    - name: Write private key
+      ansible.builtin.copy:
+        dest: "/etc/ssh/ssh_host_{{ host_key.type }}_key"
+        content: "{{ host_key.private | trim }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ sshd_host_keys }}"
+      loop_control:
+        loop_var: host_key
+        label: "ssh_host_{{ host_key.type }}_key"
+      notify: Restart sshd
+      no_log: true
+
+    - name: Write public key
+      ansible.builtin.copy:
+        dest: "/etc/ssh/ssh_host_{{ host_key.type }}_key.pub"
+        content: "{{ host_key.public | trim }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ sshd_host_keys }}"
+      loop_control:
+        loop_var: host_key
+        label: "ssh_host_{{ host_key.type }}_key.pub"
+      notify: Restart sshd

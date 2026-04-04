@@ -1,0 +1,21 @@
+- name: Build final package list
+  ansible.builtin.set_fact:
+    _common_packages_selected: >-
+      {{
+        (common_packages_override | length > 0)
+        | ternary(
+            common_packages_override,
+            common_packages_networking
+            + common_packages_cli
+            + common_packages_archives
+            + common_packages_troubleshooting
+            + common_packages_quality_of_life
+            + common_packages_extra
+          )
+      }}
+
+- name: Install common packages
+  ansible.builtin.apt:
+    name: "{{ _common_packages_selected | unique }}"
+    state: present
+    update_cache: true

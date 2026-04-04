@@ -1,0 +1,47 @@
+#!/bin/sh
+# Policy-based routing for Proxmox VMs (WireGuard mode)
+# Route VM traffic from {{ proxmox_lan_bridge }} bridge via {{ proxmox_wan_iface }} (WireGuard tunnel)
+# using routing table 100, while host traffic uses the default routing table.
+# Nebula network routes are also added to table 100 so VMs can reach internal networks.
+#
+# This script is only used when proxmox_wan_is_wireguard=true.
+# When using a physical WAN interface, VM traffic follows the host's main routing table.
+#
+# Called when network interfaces come up (via if-up.d) and by
+# the proxmox-vm-routing systemd service. Fully idempotent.
+
+# Flush table 100 and rebuild from scratch (ensures correct state)
+ip route flush table 100 2>/dev/null || true
+
+# Add default route via the WireGuard tunnel (only if the interface is up)
+if [ -d /sys/class/net/{{ proxmox_wan_iface }} ]; then
+  ip route add default dev {{ proxmox_wan_iface }} table 100
+fi
+
+# Add Nebula network route to table 100 (if tun0 exists)
+# This works regardless of whether the WireGuard tunnel or tun0 starts first
+if [ -d /sys/class/net/tun0 ]; then
+  ip route add {{ proxmox_nebula_network }} dev tun0 table 100 2>/dev/null || true
+{% set _remote_subnets = nebula_unsafe_routes | default([]) | selectattr('via', 'ne', nebula_ip | default('')) | list %}
+{% if _remote_subnets | length > 0 %}
+  # Add remote subnet routes to table 100
+{% for route in _remote_subnets %}
+  ip route add {{ route.route }} via {{ route.via }} dev tun0 table 100 2>/dev/null || true
+{% endfor %}
+{% endif %}
+fi
+
+# Block private subnets from being routed via the WireGuard tunnel
+# More specific routes (Nebula, remote subnets) added above take precedence
+# The default route via {{ proxmox_wan_iface }} handles all public internet traffic
+ip route add blackhole 10.0.0.0/8 table 100 2>/dev/null || true
+ip route add blackhole 172.16.0.0/12 table 100 2>/dev/null || true
+ip route add blackhole 192.168.0.0/16 table 100 2>/dev/null || true
+ip route add blackhole 127.0.0.0/8 table 100 2>/dev/null || true
+ip route add blackhole 169.254.0.0/16 table 100 2>/dev/null || true
+
+# Ensure exactly one ip rule exists (remove all old variants, then add one with iif)
+# iif restricts the rule to forwarded VM traffic only - host-originated traffic is unaffected
+while ip rule del from {{ proxmox_lan_cidr }} iif {{ proxmox_lan_bridge }} lookup 100 2>/dev/null; do :; done
+while ip rule del from {{ proxmox_lan_cidr }} lookup 100 2>/dev/null; do :; done
+ip rule add from {{ proxmox_lan_cidr }} iif {{ proxmox_lan_bridge }} lookup 100

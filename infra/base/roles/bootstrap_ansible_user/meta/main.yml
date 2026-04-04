@@ -1,0 +1,5 @@
+galaxy_info:
+  description: Bootstrap the Ansible management user
+  license: MIT
+  min_ansible_version: "2.20"
+dependencies: []

@@ -1,0 +1,13 @@
+bootstrap_ansible_user_name: ansible
+bootstrap_ansible_user_uid: 1199
+
+bootstrap_authorized_keys_src: "files/pubkeys/sysops.pubkeys"
+bootstrap_authorized_keys_extra_src: "files/ssh/ansible_authorized_keys.extra"
+bootstrap_authorized_keys_enable_extra: false
+bootstrap_authorized_keys_exclusive: true
+
+bootstrap_ansible_user_shell: /bin/bash
+bootstrap_ansible_user_groups:
+  - sudo
+
+bootstrap_sudoers_line: "{{ bootstrap_ansible_user_name }} ALL=(ALL) NOPASSWD:ALL"#

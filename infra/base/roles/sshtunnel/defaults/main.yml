@@ -1,0 +1,24 @@
+---
+# System user for SSH reverse tunnels
+sshtunnel_user: tunnel
+sshtunnel_user_uid: 980
+
+# SSH public keys allowed to create reverse tunnels.
+# Role is skipped entirely when this list is empty.
+# Example:
+#   sshtunnel_authorized_keys:
+#     - "ssh-ed25519 AAAA... user@host"
+sshtunnel_authorized_keys: []
+
+# SSH reverse tunnel configurations
+# Each entry defines a reverse proxy tunnel that this host will maintain.
+# The role will create a systemd service for each tunnel.
+# Example:
+#   sshtunnel_reverse_proxies:
+#     - name: "my-service"  # Unique name for this tunnel (used in systemd service name)
+#       user: "tunnel"      # SSH username on remote (default: sshtunnel_user)
+#       host: "123.123.123.123"  # Remote host IP or hostname
+#       port: 22            # SSH port on remote (default: 22)
+#       remote_port: 8080  # Port to open on remote host
+#       local_port: 80     # Local port to reverse-proxy to
+sshtunnel_reverse_proxies: []

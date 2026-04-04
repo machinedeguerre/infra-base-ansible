@@ -1,0 +1,11 @@
+- name: Hostkeys
+  ansible.builtin.import_tasks: hostkeys.yml
+
+- name: Root SSH key
+  ansible.builtin.import_tasks: root_key.yml
+
+- name: Sshd hardening config
+  ansible.builtin.import_tasks: harden.yml
+
+- name: System-wide known_hosts
+  ansible.builtin.import_tasks: known_hosts.yml

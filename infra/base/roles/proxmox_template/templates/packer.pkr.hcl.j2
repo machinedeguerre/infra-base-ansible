@@ -1,0 +1,111 @@
+packer {
+  required_plugins {
+    proxmox = {
+      source  = "github.com/hashicorp/proxmox"
+      version = "~> 1.2"
+    }
+  }
+}
+
+source "proxmox-iso" "debian" {
+  proxmox_url = "https://{{ proxmox_template_api_ip }}:{{ proxmox_template_api_port }}/api2/json"
+  username = "{{ proxmox_template_api_user }}!{{ proxmox_template_api_token_id }}"
+  token = "{{ proxmox_template_token_secret_trimmed }}"
+  insecure_skip_tls_verify = true
+
+  node = "{{ proxmox_template_api_node }}"
+  vm_id = {{ proxmox_template_vm_id }}  # Temporary VM ID for build
+
+  boot_iso {
+    iso_file = "local:iso/{{ proxmox_template_iso_filename }}"
+    iso_storage_pool = "local"
+    unmount = true
+  }
+
+  # Bind HTTP server to bridge IP so the VM can reach the preseed file
+  http_bind_address = "{{ proxmox_template_bridge_ip }}"
+  http_directory = "{{ proxmox_template_http_directory }}"
+  boot_wait = "10s"
+  boot_command = [
+    "<esc><wait>",
+    "auto url=http://{{ '{{' }} .HTTPIP {{ '}}' }}:{{ '{{' }} .HTTPPort {{ '}}' }}/preseed.cfg ",
+    "hostname=debian ",
+    "domain= ",
+    "interface=auto ",
+    "locale={{ proxmox_template_preseed_locale }} ",
+    "keymap={{ proxmox_template_preseed_keyboard }} ",
+    "fb=false debconf/frontend=noninteractive ",
+    "console-setup/ask_detect=false ",
+    "<enter>"
+  ]
+
+  memory = {{ proxmox_template_vm_memory }}
+  cores = {{ proxmox_template_vm_cpus }}
+  cpu_type = "host"
+  os = "l26"  # Linux 2.6+ kernel
+  qemu_agent = true
+
+  disks {
+    disk_size = "{{ proxmox_template_vm_disk_size }}"
+    storage_pool = "{{ proxmox_template_vm_disk_storage }}"
+    type = "scsi"
+    format = "raw"
+  }
+
+  network_adapters {
+    bridge = "{{ proxmox_template_network_bridge }}"
+    model = "virtio"
+  }
+
+  scsi_controller = "virtio-scsi-single"
+
+  cloud_init              = true
+  cloud_init_storage_pool = "local"
+
+  template_name = "{{ proxmox_template_name }}"
+  template_description = "{{ proxmox_template_description }}"
+
+  ssh_username = "root"
+  ssh_timeout = "20m"
+  ssh_private_key_file = "{{ proxmox_template_ssh_key_file }}"
+}
+
+build {
+  name = "proxmox-debian"
+  sources = ["source.proxmox-iso.debian"]
+
+  provisioner "file" {
+    source = "{{ proxmox_template_cloud_init_file }}"
+    destination = "/tmp/cloud-init.yml"
+  }
+
+  provisioner "shell" {
+    inline = [
+      # Ensure cloud-init is installed (may not have been pulled during preseed)
+      "apt-get update -qq",
+      "apt-get install -y cloud-init",
+      # Configure cloud-init (package enables its own services via postinst)
+      "mkdir -p /etc/cloud/cloud.cfg.d",
+      "cp /tmp/cloud-init.yml /etc/cloud/cloud.cfg.d/99-custom.cfg",
+      "cloud-init clean --logs",
+      # qemu-guest-agent is udev-activated, no systemctl enable needed
+      # Remove dhcpcd - it conflicts with cloud-init by overwriting /etc/resolv.conf
+      "systemctl disable dhcpcd 2>/dev/null || true",
+      "apt-get purge -y dhcpcd-base dhcpcd 2>/dev/null || true",
+      "apt-get autoremove -y",
+      # Set console to 80x25 text mode (no framebuffer)
+      "sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"/GRUB_CMDLINE_LINUX_DEFAULT=\"quiet nomodeset\"/' /etc/default/grub",
+      "echo 'GRUB_GFXPAYLOAD_LINUX=text' >> /etc/default/grub",
+      "update-grub",
+      # Clean up for template
+      "rm -f /etc/ssh/ssh_host_*",
+      "rm -f /root/.ssh/authorized_keys",
+      "rm -f /tmp/cloud-init.yml",
+      "passwd -d root",
+      "passwd -l root",
+      "truncate -s 0 /etc/machine-id",
+      "rm -f /var/lib/dbus/machine-id",
+      "ln -s /etc/machine-id /var/lib/dbus/machine-id"
+    ]
+  }
+}

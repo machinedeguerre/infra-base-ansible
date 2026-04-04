@@ -1,0 +1,16 @@
+- name: Ensure ansible user exists
+  ansible.builtin.user:
+    name: "{{ bootstrap_ansible_user_name }}"
+    uid: "{{ bootstrap_ansible_user_uid }}"
+    shell: "{{ bootstrap_ansible_user_shell }}"
+    groups: "{{ bootstrap_ansible_user_groups }}"
+    append: true
+    create_home: true
+
+- name: Ensure .ssh directory exists
+  ansible.builtin.file:
+    path: "/home/{{ bootstrap_ansible_user_name }}/.ssh"
+    state: directory
+    owner: "{{ bootstrap_ansible_user_name }}"
+    group: "{{ bootstrap_ansible_user_name }}"
+    mode: "0700"

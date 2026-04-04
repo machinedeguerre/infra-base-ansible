@@ -1,0 +1,32 @@
+# Service name differs across distros
+sshd_service_name: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
+
+# Where to place sshd drop-in hardening config
+sshd_config_dropin_dir: "/etc/ssh/sshd_config.d"
+sshd_hardening_dropin_file: "10-infra-security-hardening.conf"
+
+# Hardening toggles
+sshd_disable_root_login: true
+sshd_disable_password_auth: true
+
+# Host keys provisioned from Vault (recommended to store private/public in vault vars)
+# Each item:
+# - type: ed25519|rsa|ecdsa
+# - private: "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+# - public: "ssh-ed25519 AAAA...\n"
+sshd_host_keys: []
+
+# System-wide known_hosts destination
+ssh_system_known_hosts_path: "/etc/ssh/ssh_known_hosts"
+
+# Base known_hosts file committed in this role repo under roles/sshd/files/
+ssh_system_known_hosts_base_file: "ssh_known_hosts.base"
+
+# Consumer can extend by adding full known_hosts lines (preferred when pinning)
+ssh_system_known_hosts_extra_lines: []
+
+# Consumer can extend by providing additional known_hosts files (bundled with their playbook/repo),
+# each item is either:
+# - an absolute path on the controller, or
+# - a path relative to the playbook dir (recommended)
+ssh_system_known_hosts_extra_files: []

@@ -1,0 +1,7 @@
+---
+- name: Enable WireGuard interface on boot
+  ansible.builtin.systemd:
+    name: wg-quick@{{ wireguard_interface }}.service
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,23 @@
+---
+# Download and manage ISO files for Proxmox
+
+- name: Ensure ISO directory exists
+  ansible.builtin.file:
+    path: /var/lib/vz/template/iso
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Debug - Show ISO files to download
+  ansible.builtin.debug:
+    msg: "ISO files configured: {{ proxmox_iso_files | length }} file(s)"
+  when: proxmox_iso_files is defined
+
+- name: Process ISO files
+  ansible.builtin.include_tasks: iso_item.yml
+  loop: "{{ proxmox_iso_files }}"
+  loop_control:
+    loop_var: iso_item
+    label: "{{ iso_item.filename }}"
+  when: proxmox_iso_files | length > 0

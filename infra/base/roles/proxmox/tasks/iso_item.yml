@@ -1,0 +1,33 @@
+---
+# Process a single ISO file
+
+- name: Check if ISO file already exists
+  ansible.builtin.stat:
+    path: /var/lib/vz/template/iso/{{ iso_item.filename }}
+  register: iso_stat
+
+- name: Calculate actual SHA256 checksum of ISO file
+  ansible.builtin.shell: sha256sum /var/lib/vz/template/iso/{{ iso_item.filename }} | awk '{print $1}'
+  when: iso_stat.stat.exists
+  changed_when: false
+  register: iso_actual_checksum
+
+- name: Verify existing ISO file integrity
+  ansible.builtin.assert:
+    that:
+      - iso_actual_checksum.stdout == iso_item.checksum
+    fail_msg: >-
+      Checksum mismatch for {{ iso_item.filename }}:
+      Expected: {{ iso_item.checksum }}
+      Actual:   {{ iso_actual_checksum.stdout }}
+    success_msg: "Checksum verified for {{ iso_item.filename }}"
+  when: iso_stat.stat.exists
+
+- name: Download ISO file
+  ansible.builtin.get_url:
+    url: "{{ iso_item.url }}"
+    dest: /var/lib/vz/template/iso/{{ iso_item.filename }}
+    mode: "0644"
+    timeout: 3600
+    checksum: "sha256:{{ iso_item.checksum }}"
+  when: not iso_stat.stat.exists

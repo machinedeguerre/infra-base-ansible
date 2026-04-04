@@ -1,0 +1,95 @@
+pki:
+  ca: {{ nebula_pki_dir }}/ca.crt
+  cert: {{ nebula_pki_dir }}/host.crt
+  key: {{ nebula_pki_dir }}/host.key
+
+tun:
+  device: tun0
+{% set _filtered_routes = nebula_unsafe_routes | default([]) | selectattr('via', 'ne', nebula_ip) | list %}
+{% if _filtered_routes | length > 0 %}
+  unsafe_routes:
+{% for route in _filtered_routes %}
+{% if route.route not in (nebula_unsafe_networks | default([])) %}
+    - route: {{ route.route }}
+      via: {{ route.via }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% set is_lighthouse = 'lighthouse' in nebula_groups %}
+static_host_map:
+{% for k, v in nebula_static_host_map.items() if not (is_lighthouse and k == nebula_ip) %}
+  "{{ k }}":
+{% for addr in v %}
+    - "{{ addr }}"
+{% endfor %}
+{% endfor %}
+
+lighthouse:
+  am_lighthouse: {{ is_lighthouse | lower }}
+  hosts:
+{% for ip in nebula_lighthouse_ip if not (is_lighthouse and ip == nebula_ip) %}
+    - "{{ ip }}"
+{% endfor %}
+
+listen:
+  host: 0.0.0.0
+  port: {{ nebula_listen_port }}
+
+punchy:
+  punch: true
+  respond: true
+
+relay:
+  am_relay: {{ is_lighthouse | lower }}
+  use_relays: {{ (not is_lighthouse) | lower }}
+{% if not is_lighthouse %}
+  relays:
+{% for ip in nebula_lighthouse_ip %}
+    - "{{ ip }}"
+{% endfor %}
+{% endif %}
+
+firewall:
+  inbound:
+    # Allow ICMP from any host (to host and VMs)
+    - port: any
+      proto: icmp
+      host: any
+{% if nebula_unsafe_networks | default([]) | length > 0 %}
+      local_cidr: any
+{% endif %}
+
+    # Allow SSH inbound from any host
+    - port: 22
+      proto: tcp
+      host: any
+{% if nebula_unsafe_networks | default([]) | length > 0 %}
+      local_cidr: any
+{% endif %}
+
+{% if 'proxmox' in nebula_groups %}
+    # Allow Proxmox web interface (port 8006) from sysop group
+    - port: 8006
+      proto: tcp
+      group: sysop
+{% endif %}
+
+{% if nebula_unsafe_networks | default([]) | length > 0 %}
+    # Allow all traffic from sysop group to VM subnets
+{% for subnet in nebula_unsafe_networks %}
+    - port: any
+      proto: any
+      group: sysop
+      local_cidr: "{{ subnet }}"
+{% endfor %}
+{% endif %}
+
+  outbound:
+    # Allow all outbound traffic to any host
+    - port: any
+      proto: any
+      host: any
+{% if nebula_unsafe_networks | default([]) | length > 0 %}
+      local_cidr: any
+{% endif %}

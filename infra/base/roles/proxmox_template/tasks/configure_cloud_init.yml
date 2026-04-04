@@ -1,0 +1,62 @@
+---
+# Configure cloud-init defaults on the template so cloned VMs inherit them
+
+- name: Copy SSH public keys to host for cloud-init configuration
+  ansible.builtin.copy:
+    src: "{{ proxmox_template_ci_sshkeys_src if proxmox_template_ci_sshkeys_src is match('^/') else playbook_dir ~ '/' ~ proxmox_template_ci_sshkeys_src }}"
+    dest: /tmp/ci-sshkeys.pub
+    mode: "0644"
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set cloud-init user
+  ansible.builtin.command: >
+    qm set {{ proxmox_template_vm_id }}
+    --ciuser {{ proxmox_template_ci_user }}
+  changed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set cloud-init SSH keys
+  ansible.builtin.command: >
+    qm set {{ proxmox_template_vm_id }}
+    --sshkeys /tmp/ci-sshkeys.pub
+  changed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set cloud-init IP configuration
+  ansible.builtin.command: >
+    qm set {{ proxmox_template_vm_id }}
+    --ipconfig0 ip={{ proxmox_template_ci_default_ip }},gw={{ proxmox_template_bridge_ip }}
+  changed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set cloud-init DNS server
+  ansible.builtin.command: >
+    qm set {{ proxmox_template_vm_id }}
+    --nameserver {{ proxmox_template_bridge_ip }}
+  changed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set cloud-init DNS search domain to empty
+  ansible.builtin.command: >
+    qm set {{ proxmox_template_vm_id }}
+    --searchdomain " "
+  changed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Set cloud-init upgrade packages
+  ansible.builtin.command: >
+    qm set {{ proxmox_template_vm_id }}
+    --ciupgrade {{ '1' if proxmox_template_ci_upgrade else '0' }}
+  changed_when: false
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Check if temporary SSH keys file exists
+  ansible.builtin.stat:
+    path: /tmp/ci-sshkeys.pub
+  register: proxmox_template_ci_sshkeys_stat
+
+- name: Clean up temporary SSH keys file
+  ansible.builtin.file:
+    path: /tmp/ci-sshkeys.pub
+    state: absent
+  changed_when: proxmox_template_ci_sshkeys_stat.stat.exists

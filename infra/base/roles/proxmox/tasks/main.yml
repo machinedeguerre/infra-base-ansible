@@ -1,0 +1,27 @@
+---
+- name: Validate required variables
+  ansible.builtin.import_tasks: validation.yml
+
+- name: Setup Proxmox repository
+  ansible.builtin.import_tasks: repository.yml
+
+- name: Install packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: Configure network
+  ansible.builtin.import_tasks: network.yml
+
+- name: Configure firewall
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Configure dnsmasq
+  ansible.builtin.import_tasks: dnsmasq.yml
+
+- name: Configure services
+  ansible.builtin.import_tasks: services.yml
+
+- name: Download ISO files
+  ansible.builtin.import_tasks: iso.yml
+
+- name: Create Proxmox API token
+  ansible.builtin.import_tasks: token.yml

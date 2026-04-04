@@ -1,0 +1,145 @@
+---
+- name: Kill any leftover Packer processes from previous runs
+  ansible.builtin.shell: "killall packer 2>/dev/null || true"
+  changed_when: false
+
+- name: Get IP address of the proxmox interface
+  ansible.builtin.shell: "ip -4 addr show {{ proxmox_template_interface }} | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'"
+  register: proxmox_template_api_ip_result
+  changed_when: false
+  failed_when: false
+
+- name: Set fact for Proxmox API IP (for build_template)
+  ansible.builtin.set_fact:
+    proxmox_template_api_ip_build: "{{ proxmox_template_api_ip_result.stdout }}"
+  when: proxmox_template_api_ip_result.stdout is defined and proxmox_template_api_ip_result.stdout | length > 0
+
+- name: Debug - Check if variables are defined
+  ansible.builtin.debug:
+    msg:
+      - "proxmox_template_api_ip_build: {{ proxmox_template_api_ip_build | default('NOT DEFINED') }}"
+      - "proxmox_template_decrypted_token defined: {{ proxmox_template_decrypted_token is defined }}"
+      - "proxmox_template_decrypted_token length: {{ proxmox_template_decrypted_token | length | default(0) }}"
+      - "Token preview (first 30 chars): {{ proxmox_template_decrypted_token[:30] | default('NOT DEFINED') }}..."
+  when:
+    - proxmox_template_api_ip_build is defined or proxmox_template_decrypted_token is defined
+
+- name: Verify token works by testing API access
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_template_api_ip_build }}:{{ proxmox_template_api_port }}/api2/json/version"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_template_decrypted_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: proxmox_token_test
+  when:
+    - proxmox_template_api_ip_build is defined
+    - proxmox_template_api_ip_build | length > 0
+    - proxmox_template_decrypted_token is defined
+    - proxmox_template_decrypted_token | length > 0
+
+- name: Debug token test result
+  ansible.builtin.debug:
+    msg:
+      - "Token test status: {{ proxmox_token_test.status | default('NOT RUN') }}"
+      - "Token test failed: {{ proxmox_token_test is failed }}"
+  when: proxmox_token_test is defined
+
+- name: Fail if token authentication failed
+  ansible.builtin.fail:
+    msg: "Proxmox API token authentication failed. Check token format and vault password. Status: {{ proxmox_token_test.status | default('unknown') }}"
+  when:
+    - proxmox_template_api_ip_build is defined
+    - proxmox_template_decrypted_token is defined
+    - proxmox_token_test is failed
+
+- name: Check if template already exists in Proxmox
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_template_api_ip_build }}:{{ proxmox_template_api_port }}/api2/json/nodes/{{ proxmox_template_api_node }}/qemu"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_template_decrypted_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: proxmox_template_list
+  failed_when: false
+  when:
+    - proxmox_template_api_ip_build is defined
+    - proxmox_template_decrypted_token is defined
+
+- name: Set fact if template exists
+  ansible.builtin.set_fact:
+    proxmox_template_exists: >-
+      {{
+        proxmox_template_list.json.data | default([]) | 
+        selectattr('name', 'equalto', proxmox_template_name) | 
+        selectattr('template', 'equalto', 1) |
+        list | length > 0
+      }}
+  when:
+    - proxmox_template_list is succeeded
+    - proxmox_template_list.json is defined
+    - proxmox_template_list.json.data is defined
+
+- name: Initialize Packer plugins
+  ansible.builtin.command: "{{ proxmox_template_packer_install_path }} init /tmp/packer-config/packer.pkr.hcl"
+  args:
+    chdir: /tmp/packer-config
+  register: packer_init
+  changed_when: true
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Build template with Packer
+  ansible.builtin.command: "{{ proxmox_template_packer_install_path }} build -force /tmp/packer-config/packer.pkr.hcl"
+  args:
+    chdir: /tmp/packer-config
+  environment:
+    PACKER_LOG: "1"
+  register: packer_build
+  async: 3600
+  poll: 30
+  changed_when: true
+  when: not (proxmox_template_exists | default(false) | bool)
+
+- name: Verify template was created
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_template_api_ip_build }}:{{ proxmox_template_api_port }}/api2/json/nodes/{{ proxmox_template_api_node }}/qemu"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_template_decrypted_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: proxmox_template_verify
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - packer_build is succeeded
+    - proxmox_template_api_ip_build is defined
+
+- name: Fail if template was not created
+  ansible.builtin.fail:
+    msg: "Template {{ proxmox_template_name }} was not created successfully"
+  when:
+    - not (proxmox_template_exists | default(false) | bool)
+    - packer_build is succeeded
+    - proxmox_template_verify.json.data | default([]) | 
+      selectattr('name', 'equalto', proxmox_template_name) | 
+      selectattr('template', 'equalto', 1) |
+      list | length == 0
+
+- name: Check if Packer configuration directory exists
+  ansible.builtin.stat:
+    path: /tmp/packer-config
+  register: proxmox_template_packer_dir_cleanup_stat
+
+- name: Cleanup Packer configuration directory
+  ansible.builtin.file:
+    path: /tmp/packer-config
+    state: absent
+  changed_when: proxmox_template_packer_dir_cleanup_stat.stat.exists
+
+- name: Cleanup HTTP directory
+  ansible.builtin.file:
+    path: "{{ proxmox_template_http_directory }}"
+    state: absent
+  when: proxmox_template_http_directory is defined

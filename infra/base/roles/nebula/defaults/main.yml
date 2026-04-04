@@ -1,0 +1,33 @@
+nebula_rotate_days: 60 # Generate new cert when 60 days remains on current cert.
+nebula_cert_duration: "2160h" # New certs will be valid for 90 days
+nebula_version: "1.10.3"
+nebula_binary_path: /usr/local/bin/nebula
+
+nebula_ip: "" # REQUIRED per host, IP only e.g. "172.24.1.1"
+nebula_groups: [] # REQUIRED - must be set per host (list of group names, e.g. ['web', 'production'])
+
+nebula_lighthouse_ip: []
+
+nebula_listen_port: 4242 # Defaults to non-standard port for Nebula
+
+nebula_dir: /etc/nebula
+nebula_pki_dir: /etc/nebula/pki
+
+# Unsafe networks - subnets this host is authorized to route through Nebula.
+# Configure on hosts that SERVE a non-Nebula subnet (e.g. Proxmox hosts with VM subnets).
+# This is embedded in the host's Nebula certificate and requires cert regeneration on change.
+# Example (on a Proxmox host that routes VM traffic):
+# nebula_unsafe_networks:
+#   - "172.25.1.0/24"
+nebula_unsafe_networks: []
+
+# Unsafe routes - route non-Nebula subnets through Nebula tunnels.
+# Configure on hosts that need to REACH a non-Nebula subnet via a Nebula peer.
+# Each entry needs:
+#   - route: CIDR of the subnet to route (e.g. "172.25.1.0/24")
+#   - via: Nebula IP of the host that can reach the subnet (e.g. "172.24.1.1")
+# Example (on a laptop that needs to reach VMs on a Proxmox host):
+# nebula_unsafe_routes:
+#   - route: "172.25.1.0/24"
+#     via: "172.24.1.1"
+nebula_unsafe_routes: []

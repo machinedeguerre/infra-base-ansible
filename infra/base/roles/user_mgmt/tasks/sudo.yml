@@ -1,0 +1,19 @@
+---
+- name: "Configure sudo (password or passwordless)"
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ item.username }}"
+    content: |
+      {{ item.username }} ALL=(ALL:ALL) {% if item.passwordless_sudo %}NOPASSWD:ALL{% else %}ALL{% endif %}
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+  when: item.sudo
+  loop: "{{ user_mgmt_all_users }}"
+
+- name: "Remove sudo for non-sudo users"
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/{{ item.username }}"
+    state: absent
+  when: not item.sudo
+  loop: "{{ user_mgmt_all_users }}"

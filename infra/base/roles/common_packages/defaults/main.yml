@@ -1,0 +1,48 @@
+common_packages_networking:
+  - ca-certificates
+  - curl
+  - dnsutils
+  - gnupg
+  - iputils-ping
+  - iproute2
+  - net-tools
+  - nftables
+  - nmap
+  - rsync
+  - tcpdump
+  - traceroute
+  - wget
+
+common_packages_cli:
+  - bash-completion
+  - file
+  - less
+  - neovim
+  - tmux
+  - tree
+
+common_packages_archives:
+  - bzip2
+  - gzip
+  - tar
+  - unzip
+  - xz-utils
+  - zip
+
+common_packages_troubleshooting:
+  - htop
+  - lsb-release
+  - lsof
+  - procps
+  - psmisc
+  - strace
+
+# Optional "nice to have"
+common_packages_quality_of_life:
+  - jq
+
+# Customer/project can always append here
+common_packages_extra: []
+
+# Optional: allow full override
+common_packages_override: []

@@ -1,0 +1,26 @@
+---
+- name: "Resolve key file path for {{ _user_mgmt_user.username }}"
+  ansible.builtin.set_fact:
+    _user_mgmt_key_file: >-
+      {%- if _user_mgmt_user.authorized_keys_src is match('^/') -%}
+        {{ _user_mgmt_user.authorized_keys_src }}
+      {%- else -%}
+        {{ playbook_dir }}/{{ _user_mgmt_user.authorized_keys_src }}
+      {%- endif -%}
+
+- name: "Ensure each authorized key for {{ _user_mgmt_user.username }}"
+  ansible.builtin.lineinfile:
+    path: "{{ user_mgmt_home_base }}/{{ _user_mgmt_user.username }}/.ssh/authorized_keys"
+    line: "{{ item }}"
+    state: present
+    create: true
+    owner: "{{ _user_mgmt_user.username }}"
+    group: "{{ _user_mgmt_user.username }}"
+    mode: "0600"
+  loop: >-
+    {{ lookup('file', _user_mgmt_key_file | trim).splitlines()
+       | reject('match', '^\s*$')
+       | reject('match', '^\s*#')
+       | list }}
+  loop_control:
+    label: "{{ _user_mgmt_user.username }}: {{ item[:50] }}..."

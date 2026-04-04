@@ -1,0 +1,67 @@
+---
+# --- SSH reverse proxy tunnels ---
+# Only runs if sshtunnel_reverse_proxies is defined and non-empty
+
+- name: Ensure reverse proxy tunnels are configured
+  ansible.builtin.assert:
+    that:
+      - sshtunnel_reverse_proxies is defined
+      - sshtunnel_reverse_proxies | length > 0
+      - sshtunnel_private_key is defined
+      - sshtunnel_private_key | length > 0
+    fail_msg: >-
+      To use reverse proxy tunnels, you must:
+      1. Generate keys with: generate_sshtunnel_keys.sh <hostname>
+      2. Configure sshtunnel_reverse_proxies in host_vars
+    quiet: true
+
+- name: Create .ssh directory for tunnel user
+  ansible.builtin.file:
+    path: "/var/lib/{{ sshtunnel_user }}/.ssh"
+    state: directory
+    owner: "{{ sshtunnel_user }}"
+    group: "{{ sshtunnel_user }}"
+    mode: "0700"
+  when: sshtunnel_reverse_proxies | default([]) | length > 0
+
+- name: Install private key for tunnel user
+  ansible.builtin.copy:
+    content: "{{ sshtunnel_private_key }}"
+    dest: "/var/lib/{{ sshtunnel_user }}/.ssh/id_ed25519"
+    owner: "{{ sshtunnel_user }}"
+    group: "{{ sshtunnel_user }}"
+    mode: "0600"
+  when: sshtunnel_reverse_proxies | default([]) | length > 0
+
+- name: Create known_hosts file for tunnel user
+  ansible.builtin.file:
+    path: "/var/lib/{{ sshtunnel_user }}/.ssh/known_hosts"
+    state: file
+    owner: "{{ sshtunnel_user }}"
+    group: "{{ sshtunnel_user }}"
+    mode: "0600"
+  when: sshtunnel_reverse_proxies | default([]) | length > 0
+
+- name: Create systemd services for reverse proxy tunnels
+  ansible.builtin.template:
+    src: sshtunnel-reverse-proxy.service.j2
+    dest: "/etc/systemd/system/sshtunnel-reverse-proxy-{{ item.name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ sshtunnel_reverse_proxies }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: sshtunnel_reverse_proxies | default([]) | length > 0
+  notify: Reload systemd
+
+- name: Enable and start reverse proxy tunnel services
+  ansible.builtin.systemd:
+    name: "sshtunnel-reverse-proxy-{{ item.name }}.service"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ sshtunnel_reverse_proxies }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: sshtunnel_reverse_proxies | default([]) | length > 0

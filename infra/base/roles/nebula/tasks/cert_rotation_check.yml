@@ -1,0 +1,99 @@
+---
+# --- Determine if cert rotation needed (remote) ---
+
+- name: Stat current host cert (remote)
+  ansible.builtin.stat:
+    path: "{{ nebula_pki_dir }}/host.crt"
+  register: nebula_hostcrt_stat
+
+- name: Read current host cert info as JSON (remote)
+  ansible.builtin.command:
+    cmd: "{{ nebula_binary_path }}-cert print -json -path {{ nebula_pki_dir }}/host.crt"
+  register: nebula_cert_print_json
+  changed_when: false
+  when: nebula_hostcrt_stat.stat.exists
+
+- name: Parse cert JSON output (remote)
+  ansible.builtin.set_fact:
+    nebula_cert_json: "{{ nebula_cert_print_json.stdout | from_json }}"
+  when: nebula_hostcrt_stat.stat.exists
+
+- name: Extract cert details from JSON (remote)
+  ansible.builtin.set_fact:
+    nebula_cert_json_obj: >-
+      {{
+        nebula_cert_json | first
+        if nebula_cert_json is sequence
+        else nebula_cert_json
+      }}
+  when: nebula_hostcrt_stat.stat.exists
+
+- name: Parse cert info from JSON object (remote)
+  ansible.builtin.set_fact:
+    nebula_cert_details: "{{ nebula_cert_json_obj.details | default({}) }}"
+    nebula_not_after_str: "{{ nebula_cert_json_obj.details.notAfter | default('') }}"
+  when: nebula_hostcrt_stat.stat.exists
+
+- name: Extract IPs, groups and unsafe networks from cert (remote)
+  ansible.builtin.set_fact:
+    nebula_cert_ips: "{{ nebula_cert_details.ips | default(nebula_cert_details.networks | default([])) }}"
+    nebula_cert_groups: "{{ nebula_cert_details.groups | default([]) }}"
+    nebula_cert_unsafe_networks: "{{ nebula_cert_details.unsafeNetworks | default([]) | default([], true) }}"
+  when: nebula_hostcrt_stat.stat.exists
+
+- name: Set default values when cert missing (remote)
+  ansible.builtin.set_fact:
+    nebula_cert_ips: []
+    nebula_cert_groups: []
+    nebula_cert_unsafe_networks: []
+    nebula_not_after_str: ""
+  when: not nebula_hostcrt_stat.stat.exists
+
+- name: Check if IP has changed (remote)
+  ansible.builtin.set_fact:
+    nebula_ip_changed: >-
+      {{
+        nebula_cert_ips | default([]) | length == 0
+        or
+        (nebula_ip + '/16') not in nebula_cert_ips
+      }}
+
+- name: Check if groups have changed (remote)
+  ansible.builtin.set_fact:
+    nebula_groups_changed: >-
+      {{
+        nebula_cert_groups | default([]) | sort != nebula_groups | sort
+      }}
+
+- name: Check if unsafe networks have changed (remote)
+  ansible.builtin.set_fact:
+    nebula_unsafe_networks_changed: >-
+      {{
+        nebula_cert_unsafe_networks | default([]) | sort != nebula_unsafe_networks | default([]) | sort
+      }}
+
+- name: Decide rotation needed (remote)
+  ansible.builtin.set_fact:
+    nebula_rotate_needed: >-
+      {{
+        (not nebula_hostcrt_stat.stat.exists)
+        or
+        (nebula_not_after_str | default('') | trim == '')
+        or
+        nebula_ip_changed | default(false)
+        or
+        nebula_groups_changed | default(false)
+        or
+        nebula_unsafe_networks_changed | default(false)
+        or
+        (
+          nebula_not_after_str | default('') | trim != ''
+          and
+          (nebula_not_after_str | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()
+          <=
+          (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()
+          + ((nebula_rotate_days | int) * 86400)
+        )
+      }}
+  vars:
+    ansible_date_time: "{{ ansible_facts.date_time }}"

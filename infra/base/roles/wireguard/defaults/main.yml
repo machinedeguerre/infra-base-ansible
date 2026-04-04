@@ -1,0 +1,43 @@
+# WireGuard mode: 'server' or 'client'
+wireguard_mode: ""  # REQUIRED - must be 'server' or 'client'
+
+# ------------------------------------------------------------------------------------------------
+# Common settings (used for both server and client mode)
+wireguard_interface: "wg0"  # WireGuard interface name
+wireguard_config_dir: /etc/wireguard
+wireguard_ip: ""  # REQUIRED - node IP in WireGuard network (e.g. "10.0.0.1/24" for server, "10.0.0.2/32" for client)
+wireguard_private_key: ""  # REQUIRED - node private key (generate with: generate_wireguard_keys.sh)
+# Note: Public key is automatically calculated from private key, no configuration needed
+wireguard_network: "10.0.0.0/24"  # REQUIRED for server, OPTIONAL for client - WireGuard network CIDR
+wireguard_keepalive: 9  # Keepalive interval in seconds (used by both server and client)
+# Note: Client always sets AllowedIPs = 0.0.0.0/0 so all traffic sent to the WireGuard interface
+# is routed through the tunnel. Use policy-based routing (e.g. proxmox_wan_iface) to control
+# which traffic actually reaches the WireGuard interface.
+
+# ------------------------------------------------------------------------------------------------
+# Server configuration (when wireguard_mode == 'server')
+wireguard_server_port: 60297  # Default to non-standard port to obfuscate WireGuard traffic
+wireguard_server_public_interface: ""  # REQUIRED for server - public interface for NAT (e.g. "eth0")
+
+# Server clients configuration
+# IMPORTANT: Each client MUST have a unique key pair (private key + public key) and unique IP address.
+# Multiple clients cannot share the same keys or IP addresses.
+# List of clients, each with:
+#   - public_key: client's public key (MUST be unique per client)
+#   - allowed_ips: IP address in WireGuard network (e.g. "10.0.0.2/32") (MUST be unique per client)
+# Example:
+# wireguard_clients:
+#   - public_key: "client1_public_key_here"  # Generate with: wg genkey | wg pubkey
+#     allowed_ips: "10.0.0.2/32"
+#   - public_key: "client2_public_key_here"  # Different key for each client!
+#     allowed_ips: "10.0.0.3/32"  # Different IP for each client!
+wireguard_clients: []  # Empty by default, configure per server
+
+# ------------------------------------------------------------------------------------------------
+# Client configuration (when wireguard_mode == 'client')
+wireguard_endpoint: ""  # REQUIRED for client - server endpoint (e.g. "example.com:60297" or "1.2.3.4:60297")
+wireguard_server_public_key: ""  # REQUIRED for client - server's public key (get with: get_wireguard_public_key.sh <hostname>)
+# Note: WireGuard client only routes WireGuard network traffic by default.
+# For routing VM traffic via WireGuard, configure policy-based routing in the Proxmox role
+# by setting proxmox_wan_iface to the WireGuard interface (e.g. "wg0") and
+# proxmox_wan_is_wireguard to true.

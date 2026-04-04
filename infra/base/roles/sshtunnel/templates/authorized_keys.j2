@@ -1,0 +1,3 @@
+{% for key in sshtunnel_authorized_keys %}
+restrict,port-forwarding {{ key }}
+{% endfor %}

@@ -1,0 +1,50 @@
+---
+- name: "Look up all existing user accounts"
+  ansible.builtin.getent:
+    database: passwd
+
+- name: "Look up existing user accounts by uid"
+  ansible.builtin.command: "getent passwd {{ item.uid }}"
+  register: user_mgmt_uid_check
+  failed_when: false
+  changed_when: false
+  when: item.uid is defined
+  loop: "{{ user_mgmt_all_users }}"
+
+- name: "Fail if user without uid does not exist on target"
+  ansible.builtin.fail:
+    msg: "User '{{ item.username }}' has no uid defined and does not exist on the target host."
+  when:
+    - item.uid is not defined
+    - item.username not in ansible_facts.getent_passwd
+  loop: "{{ user_mgmt_all_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: "Fail if username exists with a different uid"
+  ansible.builtin.fail:
+    msg: >-
+      User '{{ item.username }}' exists on target with uid
+      {{ ansible_facts.getent_passwd[item.username][1] }}
+      but uid {{ item.uid }} was specified.
+  when:
+    - item.uid is defined
+    - item.username in ansible_facts.getent_passwd
+    - ansible_facts.getent_passwd[item.username][1] | int != item.uid | int
+  loop: "{{ user_mgmt_all_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: "Fail if uid is already in use by a different user"
+  ansible.builtin.fail:
+    msg: >-
+      uid {{ item.item.uid }} is already in use by
+      '{{ item.stdout.split(':')[0] }}'
+      but was specified for '{{ item.item.username }}'.
+  when:
+    - item is not skipped
+    - item.rc == 0
+    - item.stdout.split(':')[0] != item.item.username
+  loop: "{{ user_mgmt_uid_check.results }}"
+  loop_control:
+    label: "{{ item.item.username }}"

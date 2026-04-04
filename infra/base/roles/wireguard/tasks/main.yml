@@ -1,0 +1,21 @@
+---
+- name: Validate required variables
+  ansible.builtin.include_tasks: validation.yml
+
+- name: Install WireGuard
+  ansible.builtin.include_tasks: install.yml
+
+- name: Configure WireGuard server
+  ansible.builtin.include_tasks: server.yml
+  when: wireguard_mode == 'server'
+
+- name: Configure WireGuard client
+  ansible.builtin.include_tasks: client.yml
+  when: wireguard_mode == 'client'
+
+- name: Configure firewall and NAT (server only)
+  ansible.builtin.include_tasks: firewall.yml
+  when: wireguard_mode == 'server'
+
+- name: Enable and start WireGuard service
+  ansible.builtin.include_tasks: service.yml

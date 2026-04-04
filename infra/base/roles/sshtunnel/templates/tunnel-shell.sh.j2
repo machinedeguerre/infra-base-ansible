@@ -1,0 +1,8 @@
+#!/bin/sh
+# Managed by Ansible (infra.base.sshtunnel)
+# Restrictive shell for the {{ sshtunnel_user }} user.
+# Denies all interactive/command access; only SSH reverse tunnels are allowed.
+
+logger -t tunnel-shell "Rejected shell access for user=$(whoami) from=${SSH_CLIENT:-unknown}: $*"
+echo "This account is restricted to SSH reverse tunnels only." >&2
+exit 1

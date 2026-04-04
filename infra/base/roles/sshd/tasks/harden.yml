@@ -1,0 +1,22 @@
+- name: Ensure sshd drop-in directory exists
+  ansible.builtin.file:
+    path: "{{ sshd_config_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install sshd hardening drop-in
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: "{{ sshd_config_dropin_dir }}/{{ sshd_hardening_dropin_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sshd
+
+- name: Ensure sshd is enabled and running
+  ansible.builtin.service:
+    name: "{{ sshd_service_name }}"
+    enabled: true
+    state: started

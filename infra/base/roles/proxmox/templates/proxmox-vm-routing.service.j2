@@ -1,0 +1,13 @@
+[Unit]
+Description=Proxmox VM Policy-Based Routing (table 100 via WireGuard)
+After=network-online.target wg-quick@{{ proxmox_wan_iface }}.service nebula.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/network/if-up.d/proxmox-vm-routing
+RemainAfterExit=yes
+# Script is idempotent, so it's safe to run multiple times
+
+[Install]
+WantedBy=multi-user.target

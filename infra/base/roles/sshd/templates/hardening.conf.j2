@@ -1,0 +1,21 @@
+# Managed by Ansible (infra.base.sshd)
+
+{% if sshd_disable_root_login %}
+PermitRootLogin no
+{% endif %}
+
+{% if sshd_disable_password_auth %}
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+{% endif %}
+
+# Recommended safe defaults (adjust if needed)
+UsePAM yes
+X11Forwarding no
+PermitEmptyPasswords no
+
+# Keep connections alive over tunnels (Nebula/WireGuard)
+ClientAliveInterval 30
+ClientAliveCountMax 3
+TCPKeepAlive yes

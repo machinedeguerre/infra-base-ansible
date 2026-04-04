@@ -1,0 +1,82 @@
+---
+- name: Determine architecture for packer binary
+  ansible.builtin.set_fact:
+    packer_arch: >-
+      {{
+        {
+          'x86_64': 'amd64',
+          'aarch64': 'arm64',
+          'armv7l': 'armv7',
+          'armv6l': 'armv6'
+        }[ansible_facts['architecture']] | default('amd64')
+      }}
+
+- name: Set packer download URL
+  ansible.builtin.set_fact:
+    packer_download_url: >-
+      https://releases.hashicorp.com/packer/{{ proxmox_template_packer_version }}/packer_{{ proxmox_template_packer_version }}_linux_{{ packer_arch }}.zip
+
+- name: Check if packer binary exists and get version
+  ansible.builtin.command: "{{ proxmox_template_packer_install_path }} version"
+  register: packer_version_check
+  failed_when: false
+  changed_when: false
+
+- name: Set fact if packer needs installation
+  ansible.builtin.set_fact:
+    packer_needs_install: >-
+      {{
+        packer_version_check.rc != 0 or
+        packer_version_check.stdout is not search('v' + proxmox_template_packer_version)
+      }}
+
+- name: Create temporary directory for packer installation
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "packer-install-"
+  register: packer_install_tmp
+  when: packer_needs_install | bool
+
+- name: Download packer binary archive
+  ansible.builtin.get_url:
+    url: "{{ packer_download_url }}"
+    dest: "{{ packer_install_tmp.path }}/packer.zip"
+    mode: "0644"
+    timeout: 30
+  when:
+    - packer_needs_install | bool
+    - packer_install_tmp is defined
+    - packer_install_tmp.path is defined
+
+- name: Extract packer binary archive
+  ansible.builtin.unarchive:
+    src: "{{ packer_install_tmp.path }}/packer.zip"
+    dest: "{{ packer_install_tmp.path }}"
+    remote_src: true
+  when:
+    - packer_needs_install | bool
+    - packer_install_tmp is defined
+    - packer_install_tmp.path is defined
+    - packer_install_tmp.path | length > 0
+
+- name: Install packer binary
+  ansible.builtin.copy:
+    src: "{{ packer_install_tmp.path }}/packer"
+    dest: "{{ proxmox_template_packer_install_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  when:
+    - packer_needs_install | bool
+    - packer_install_tmp is defined
+    - packer_install_tmp.path is defined
+
+- name: Cleanup temporary directory
+  ansible.builtin.file:
+    path: "{{ packer_install_tmp.path }}"
+    state: absent
+  when:
+    - packer_needs_install | bool
+    - packer_install_tmp is defined
+    - packer_install_tmp.path is defined

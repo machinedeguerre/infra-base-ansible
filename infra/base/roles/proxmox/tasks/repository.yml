@@ -1,0 +1,76 @@
+---
+- name: Remove all old Proxmox repository files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pve-enterprise.list
+    - /etc/apt/sources.list.d/pve-no-subscription.list
+    - /etc/apt/sources.list.d/proxmox-ve.list
+  ignore_errors: true
+
+- name: Find all Proxmox repository files
+  ansible.builtin.find:
+    paths: /etc/apt/sources.list.d
+    patterns: "*proxmox*,*pve*"
+    file_type: file
+  register: proxmox_repo_files
+
+- name: Remove found Proxmox repository files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ proxmox_repo_files.files }}"
+  when: 
+    - proxmox_repo_files.files | length > 0
+    - item.path != '/etc/apt/sources.list.d/pve-install-repo.sources'
+
+- name: Remove Proxmox repositories from main sources.list
+  ansible.builtin.lineinfile:
+    path: /etc/apt/sources.list
+    regexp: '.*proxmox.*|.*pve.*'
+    state: absent
+  ignore_errors: true
+
+- name: Remove old Proxmox GPG keys
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
+    - /etc/apt/trusted.gpg.d/proxmox-release-trixie.gpg
+  ignore_errors: true
+
+- name: Ensure keyrings directory exists
+  ansible.builtin.file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Check if Proxmox keyring exists
+  ansible.builtin.stat:
+    path: /usr/share/keyrings/proxmox-archive-keyring.gpg
+  register: proxmox_keyring_stat
+
+- name: Download Proxmox archive keyring (official method for Trixie)
+  ansible.builtin.get_url:
+    url: https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
+    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    mode: "0444"
+    validate_certs: true
+  when: not proxmox_keyring_stat.stat.exists
+
+- name: Add Proxmox VE repository using deb822 format
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pve-install-repo.sources
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pve
+      Suites: trixie
+      Components: pve-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes

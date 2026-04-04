@@ -1,0 +1,23 @@
+---
+# --- Create ed25519 key for root if missing ---
+
+- name: Check if root ed25519 key exists
+  ansible.builtin.stat:
+    path: /root/.ssh/id_ed25519
+  register: root_ed25519_key_stat
+
+- name: Ensure /root/.ssh directory exists
+  ansible.builtin.file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: not root_ed25519_key_stat.stat.exists
+
+- name: Generate ed25519 key for root
+  ansible.builtin.command:
+    cmd: ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -C "root@{{ inventory_hostname }}"
+    creates: /root/.ssh/id_ed25519
+  when: not root_ed25519_key_stat.stat.exists
+  changed_when: true

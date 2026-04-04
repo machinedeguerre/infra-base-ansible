@@ -1,0 +1,18 @@
+---
+- name: Ensure required vars
+  ansible.builtin.assert:
+    that:
+      - nebula_ip is defined
+      - nebula_ip | length > 0
+      - nebula_groups is defined
+      - nebula_groups | length > 0
+      - nebula_ca_crt_pem is defined
+      - nebula_ca_crt_pem | length > 0
+      - nebula_ca_key_pem is defined
+      - nebula_ca_key_pem | length > 0
+    fail_msg: >-
+      Required variables must be set:
+      - nebula_ip (per host)
+      - nebula_groups (per host)
+      - nebula_ca_crt_pem (CA certificate, typically from vault)
+      - nebula_ca_key_pem (CA key, typically from vault)

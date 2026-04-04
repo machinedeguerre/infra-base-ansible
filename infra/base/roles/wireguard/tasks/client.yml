@@ -1,0 +1,30 @@
+---
+- name: Calculate public key from private key
+  ansible.builtin.shell: echo "{{ wireguard_private_key }}" | wg pubkey
+  register: wireguard_public_key_calc
+  changed_when: false
+
+- name: Set public key fact
+  ansible.builtin.set_fact:
+    wireguard_public_key: "{{ wireguard_public_key_calc.stdout | trim }}"
+
+- name: Ensure WireGuard config directory exists
+  ansible.builtin.file:
+    path: "{{ wireguard_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Set allowed IPs to route all traffic via WireGuard server
+  ansible.builtin.set_fact:
+    wireguard_client_allowed_ips: "{{ ['0.0.0.0/0'] }}"
+
+- name: Generate WireGuard client configuration
+  ansible.builtin.template:
+    src: wireguard-client.conf.j2
+    dest: "{{ wireguard_config_dir }}/{{ wireguard_interface }}.conf"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart WireGuard

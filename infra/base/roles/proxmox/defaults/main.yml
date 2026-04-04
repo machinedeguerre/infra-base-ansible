@@ -1,0 +1,56 @@
+# Proxmox interface configuration
+proxmox_interface: tun0  # Interface for pveproxy (admin interface) - Nebula creates tun0 by default
+proxmox_port: 8006
+
+# Network configuration
+proxmox_lan_bridge: "vmbr1"  # Bridge name for VM network (Proxmox requires vmbr* naming)
+proxmox_lan_addr: ""  # REQUIRED per host, IP only e.g. "172.25.1.1"
+proxmox_lan_netmask: ""  # REQUIRED per host, CIDR prefix length only e.g. "24" (not dot notation)
+proxmox_wan_iface: ""  # REQUIRED per host, interface name only e.g. "eno1" or "wg0"
+
+# WireGuard WAN configuration
+# Set to true when proxmox_wan_iface is a WireGuard tunnel (e.g. "wg0").
+# This enables policy-based routing (table 100) to route VM internet traffic via the
+# WireGuard tunnel while keeping host traffic on the default route. It also installs
+# wg-quick/nebula drop-ins that rebuild routing table 100 after interface restarts.
+# When false (physical interface like "eno1"), VM traffic follows the host's main
+# routing table and no separate routing table is needed.
+proxmox_wan_is_wireguard: false
+
+# DHCP configuration
+proxmox_dhcp_range_start: ""  # e.g. "172.25.1.100"
+proxmox_dhcp_range_end: ""  # e.g. "172.25.1.200"
+
+# Nebula routing (for direct routing between Nebula VPN and VM subnet)
+proxmox_nebula_network: "172.24.0.0/16"  # Nebula VPN network (from CA config)
+# Note: VM subnet is proxmox_lan_cidr (e.g. "172.25.1.0/24")
+
+# Postfix SMTP relay (smart host) configuration
+# If proxmox_postfix_relayhost is set, all mail will be forwarded to this SMTP server
+proxmox_postfix_relayhost: ""  # e.g. "smtp.example.com" or "smtp.gmail.com"
+proxmox_postfix_relayhost_port: 587  # SMTP port (commonly 587 for TLS, 25 for plain SMTP)
+proxmox_postfix_relayhost_username: ""  # Optional: username for SMTP authentication
+proxmox_postfix_relayhost_password: ""  # Optional: password for SMTP authentication (consider using vault)
+
+# ISO file management
+# ISO files are downloaded to /var/lib/vz/template/iso/ (standard Proxmox ISO storage location)
+# List of ISO files to download. Each item must have:
+#   - filename: name of the ISO file (e.g. "debian-13.3.0-amd64-netinst.iso")
+#   - url: full URL to download the ISO file
+#   - checksum: SHA256 checksum of the ISO file (without "sha256:" prefix, just the hash)
+# Example:
+# proxmox_iso_files:
+#   - filename: "debian-13.3.0-amd64-netinst.iso"
+#     url: "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.3.0-amd64-netinst.iso"
+#     checksum: "a1b2c3d4e5f6..."
+#   - filename: "ubuntu-24.04-server-amd64.iso"
+#     url: "https://releases.ubuntu.com/24.04/ubuntu-24.04-server-amd64.iso"
+#     checksum: "b2c3d4e5f6a1..."
+proxmox_iso_files:
+  - filename: "debian-13.4.0-amd64-netinst.iso"
+    url: "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.4.0-amd64-netinst.iso"
+    checksum: "0b813535dd76f2ea96eff908c65e8521512c92a0631fd41c95756ffd7d4896dc"
+
+# Proxmox API token configuration
+proxmox_token_id: "ansible-automation"  # Token ID for the created token
+proxmox_token_comment: "Ansible automation token"  # Optional comment

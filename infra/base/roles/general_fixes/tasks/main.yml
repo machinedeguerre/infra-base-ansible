@@ -1,0 +1,12 @@
+---
+- name: Check if /etc/sysctl.conf exists
+  ansible.builtin.stat:
+    path: /etc/sysctl.conf
+  register: sysctl_conf_stat
+
+- name: Create /etc/sysctl.conf if it doesn't exist
+  ansible.builtin.file:
+    path: /etc/sysctl.conf
+    state: touch
+    mode: "0644"
+  when: not sysctl_conf_stat.stat.exists

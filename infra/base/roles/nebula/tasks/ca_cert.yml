@@ -1,0 +1,23 @@
+---
+- name: Check if CA cert file exists
+  ansible.builtin.stat:
+    path: "{{ nebula_pki_dir | default('/etc/nebula/pki') }}/ca.crt"
+  register: nebula_ca_crt_stat
+
+- name: Read current CA cert content
+  ansible.builtin.slurp:
+    src: "{{ nebula_pki_dir | default('/etc/nebula/pki') }}/ca.crt"
+  register: nebula_ca_crt_current
+  when: nebula_ca_crt_stat.stat.exists
+
+- name: Install CA cert (remote)
+  ansible.builtin.copy:
+    content: "{{ nebula_ca_crt_pem }}"
+    dest: "{{ nebula_pki_dir | default('/etc/nebula/pki') }}/ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart nebula
+  when: >
+    not nebula_ca_crt_stat.stat.exists
+    or (nebula_ca_crt_current.content | b64decode | trim) != (nebula_ca_crt_pem | trim)

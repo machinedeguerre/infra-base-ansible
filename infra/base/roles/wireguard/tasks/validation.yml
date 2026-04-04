@@ -1,0 +1,96 @@
+---
+- name: Validate wireguard_mode
+  ansible.builtin.assert:
+    that:
+      - wireguard_mode is defined
+      - wireguard_mode in ['server', 'client']
+    fail_msg: "wireguard_mode must be set to either 'server' or 'client'"
+
+- name: Check if server variables are defined
+  ansible.builtin.set_fact:
+    _wg_server_public_interface_defined: "{{ wireguard_server_public_interface is defined and wireguard_server_public_interface | length > 0 }}"
+    _wg_private_key_defined: "{{ wireguard_private_key is defined and wireguard_private_key | length > 0 }}"
+    _wg_ip_defined: "{{ wireguard_ip is defined and wireguard_ip | length > 0 }}"
+    _wg_network_defined: "{{ wireguard_network is defined and wireguard_network | length > 0 }}"
+  when: wireguard_mode == 'server'
+
+- name: Validate server configuration
+  block:
+    - name: Assert server variables are set
+      ansible.builtin.assert:
+        that:
+          - _wg_server_public_interface_defined | bool
+          - _wg_private_key_defined | bool
+          - _wg_ip_defined | bool
+          - _wg_network_defined | bool
+        fail_msg: >-
+          Required server variables must be set:
+          - wireguard_server_public_interface (e.g. "eth0") - {{ 'OK' if _wg_server_public_interface_defined | bool else 'MISSING or EMPTY' }}
+          - wireguard_private_key (generate with: generate_wireguard_keys.sh) - {{ 'OK' if _wg_private_key_defined | bool else 'MISSING or EMPTY' }}
+          - wireguard_ip (e.g. "10.0.0.1/24") - {{ 'OK' if _wg_ip_defined | bool else 'MISSING or EMPTY' }}
+          - wireguard_network (e.g. "10.0.0.0/24") - {{ 'OK' if _wg_network_defined | bool else 'MISSING or EMPTY' }}
+          Note: If using vault variables, ensure they are loaded and not empty.
+  when: wireguard_mode == 'server'
+
+- name: Extract client public keys
+  ansible.builtin.set_fact:
+    _wireguard_client_public_keys: "{{ wireguard_clients | map(attribute='public_key') | list }}"
+  when:
+    - wireguard_mode == 'server'
+    - wireguard_clients | length > 0
+
+- name: Extract client IP addresses
+  ansible.builtin.set_fact:
+    _wireguard_client_ips: "{{ wireguard_clients | map(attribute='allowed_ips') | list }}"
+  when:
+    - wireguard_mode == 'server'
+    - wireguard_clients | length > 0
+
+- name: Validate unique client public keys
+  block:
+    - name: Assert unique client public keys
+      ansible.builtin.assert:
+        that:
+          - _wireguard_client_public_keys | length == (_wireguard_client_public_keys | unique | length)
+        fail_msg: >-
+          Each client must have a unique public key. Duplicate public keys found.
+          Each WireGuard client must have its own unique key pair (private key + public key).
+          Generate unique keys for each client with: wg genkey | wg pubkey
+  when:
+    - wireguard_mode == 'server'
+    - wireguard_clients | length > 0
+
+- name: Validate unique client IP addresses
+  block:
+    - name: Assert unique client IP addresses
+      ansible.builtin.assert:
+        that:
+          - _wireguard_client_ips | length == (_wireguard_client_ips | unique | length)
+        fail_msg: >-
+          Each client must have a unique IP address (allowed_ips). Duplicate IP addresses found.
+          Each WireGuard client must have its own unique IP address in the WireGuard network.
+  when:
+    - wireguard_mode == 'server'
+    - wireguard_clients | length > 0
+
+- name: Validate client configuration
+  block:
+    - name: Assert client variables are set
+      ansible.builtin.assert:
+        that:
+          - wireguard_endpoint is defined
+          - wireguard_endpoint | length > 0
+          - wireguard_server_public_key is defined
+          - wireguard_server_public_key | length > 0
+          - wireguard_private_key is defined
+          - wireguard_private_key | length > 0
+          - wireguard_ip is defined
+          - wireguard_ip | length > 0
+        fail_msg: >-
+          Required client variables must be set:
+          - wireguard_endpoint (e.g. "example.com:51820")
+          - wireguard_server_public_key (get with: get_wireguard_public_key.sh <hostname>)
+          - wireguard_private_key (generate with: generate_wireguard_keys.sh)
+          - wireguard_ip (e.g. "10.0.0.2/32")
+          Note: AllowedIPs are automatically set to all public IPv4 ranges (private networks excluded)
+  when: wireguard_mode == 'client'

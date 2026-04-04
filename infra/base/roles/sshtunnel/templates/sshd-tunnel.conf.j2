@@ -1,0 +1,3 @@
+# Managed by Ansible (infra.base.sshtunnel)
+Match User {{ sshtunnel_user }}
+    AuthorizedKeysFile /etc/ssh/authorized_keys.d/{{ sshtunnel_user }}

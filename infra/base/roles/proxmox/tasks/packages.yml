@@ -1,0 +1,68 @@
+---
+- name: Update and upgrade base
+  ansible.builtin.apt:
+    update_cache: yes
+    state: latest
+    autoclean: yes
+    autoremove: yes
+
+- name: Installing Proxmox
+  ansible.builtin.apt:
+    pkg:
+      - proxmox-ve
+      - postfix
+      - open-iscsi
+      - ifupdown2
+      - nftables
+      - dnsmasq
+    state: present
+    update_cache: yes
+
+- name: Remove Proxmox enterprise repo files (recreated by proxmox-ve package)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pve-enterprise.list
+    - /etc/apt/sources.list.d/pve-enterprise.sources
+
+- name: Remove os-prober package
+  ansible.builtin.apt:
+    name: os-prober
+    state: absent
+
+- name: Configure rpcbind to listen only on localhost
+  ansible.builtin.lineinfile:
+    path: /etc/default/rpcbind
+    regexp: '^OPTIONS='
+    line: 'OPTIONS="-h 127.0.0.1 -h ::1"'
+    create: yes
+
+- name: Ensure override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/rpcbind.socket.d
+    state: directory
+    mode: '0755'
+
+- name: Override rpcbind.socket to listen only on localhost
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/rpcbind.socket.d/override.conf
+    content: |
+      [Socket]
+      ListenStream=127.0.0.1:111
+      ListenDatagram=127.0.0.1:111
+  notify: Reload systemd and restart rpcbind
+
+- name: Stop and mask rpcbind socket
+  ansible.builtin.systemd:
+    name: rpcbind.socket
+    state: stopped
+    enabled: false
+    masked: true
+
+- name: Stop and mask rpcbind service
+  ansible.builtin.systemd:
+    name: rpcbind
+    state: stopped
+    enabled: false
+    masked: true

@@ -1,0 +1,93 @@
+---
+- name: Check if interface exists
+  ansible.builtin.stat:
+    path: /sys/class/net/{{ proxmox_interface }}
+  register: proxmox_interface_stat
+
+- name: Wait for interface to be available
+  ansible.builtin.wait_for:
+    path: /sys/class/net/{{ proxmox_interface }}
+    timeout: 60
+  when: not proxmox_interface_stat.stat.exists
+
+- name: Get IP address of the chosen interface
+  ansible.builtin.shell: "ip -4 addr show {{ proxmox_interface }} | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'"
+  register: interface_ip
+  changed_when: false
+  failed_when: false
+
+- name: Fail if interface has no IP address
+  ansible.builtin.fail:
+    msg: "Interface {{ proxmox_interface }} does not exist or has no IP address"
+  when: interface_ip.rc != 0 or interface_ip.stdout | length == 0
+
+- name: Set pveproxy options
+  ansible.builtin.lineinfile:
+    path: /etc/default/pveproxy
+    regexp: '^LISTEN_IP='
+    line: 'LISTEN_IP="{{ interface_ip.stdout }}"'
+    create: yes
+  register: pveproxy_options
+
+- name: Restart pveproxy if options changed
+  ansible.builtin.systemd:
+    name: pveproxy
+    state: restarted
+  when: pveproxy_options.changed
+
+- name: Configure postfix to listen only on loopback
+  ansible.builtin.lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: '^inet_interfaces\s*='
+    line: 'inet_interfaces = loopback-only'
+    create: no
+    backrefs: yes
+  notify: Restart postfix
+
+- name: Configure postfix relayhost (smart host)
+  ansible.builtin.lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: '^relayhost\s*='
+    line: 'relayhost = [{{ proxmox_postfix_relayhost }}]:{{ proxmox_postfix_relayhost_port }}'
+    create: no
+    backrefs: yes
+  when: proxmox_postfix_relayhost | length > 0
+  notify: Restart postfix
+
+- name: Configure postfix SASL authentication for relayhost
+  ansible.builtin.lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: '^{{ item.regexp }}'
+    line: '{{ item.line }}'
+    create: no
+    backrefs: yes
+  when:
+    - proxmox_postfix_relayhost | length > 0
+    - proxmox_postfix_relayhost_username | length > 0
+    - proxmox_postfix_relayhost_password | length > 0
+  loop:
+    - regexp: '^smtp_sasl_auth_enable\s*='
+      line: 'smtp_sasl_auth_enable = yes'
+    - regexp: '^smtp_sasl_security_options\s*='
+      line: 'smtp_sasl_security_options = noanonymous'
+    - regexp: '^smtp_sasl_password_maps\s*='
+      line: 'smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd'
+    - regexp: '^smtp_tls_security_level\s*='
+      line: 'smtp_tls_security_level = encrypt'
+  notify: Restart postfix
+
+- name: Create postfix SASL password file
+  ansible.builtin.copy:
+    dest: /etc/postfix/sasl_passwd
+    content: |
+      [{{ proxmox_postfix_relayhost }}]:{{ proxmox_postfix_relayhost_port }} {{ proxmox_postfix_relayhost_username }}:{{ proxmox_postfix_relayhost_password }}
+    mode: "0600"
+    owner: root
+    group: root
+  when:
+    - proxmox_postfix_relayhost | length > 0
+    - proxmox_postfix_relayhost_username | length > 0
+    - proxmox_postfix_relayhost_password | length > 0
+  notify: 
+    - Postfix postmap sasl_passwd
+    - Restart postfix

@@ -1,0 +1,44 @@
+---
+- name: Create nftables.d dir
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    mode: "0755"
+
+- name: Include nftables.d to /etc/nftables.conf
+  ansible.builtin.lineinfile:
+    path: /etc/nftables.conf
+    regexp: '^include "/etc/nftables\.d/.*"$'
+    line: 'include "/etc/nftables.d/*.nft"'
+    insertafter: EOF
+    state: present
+
+- name: "NAT masquerading for {{ proxmox_lan_cidr }} via {{ proxmox_wan_iface }} (wan interface)"
+  ansible.builtin.copy:
+    dest: /etc/nftables.d/nat.nft
+    mode: "0644"
+    content: |
+      table ip nat {
+        chain postrouting {
+          type nat hook postrouting priority srcnat;
+          oifname "{{ proxmox_wan_iface }}" ip saddr {{ proxmox_lan_cidr }} masquerade;
+        }
+      }
+
+      # Clamp MSS on all forwarded TCP SYN packets to 1260.
+      # This accommodates the lowest-MTU tunnel (Nebula tun0, MTU 1300)
+      # and ensures TLS/HTTPS works through tunnel interfaces.
+      # MSS 1260 + TCP header 20 + IP header 20 = 1300 bytes (fits Nebula MTU).
+      table ip mangle {
+        chain forward {
+          type filter hook forward priority mangle;
+          tcp flags syn tcp option maxseg size set 1260;
+        }
+      }
+  notify: Reload nftables
+
+- name: Enable and start nftables
+  ansible.builtin.service:
+    name: nftables
+    state: started
+    enabled: true

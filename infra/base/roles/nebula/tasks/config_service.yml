@@ -1,0 +1,35 @@
+---
+# --- Config + service (remote) ---
+
+- name: Render nebula config (remote)
+  ansible.builtin.template:
+    src: nebula.yml.j2
+    dest: "{{ nebula_dir | default('/etc/nebula') }}/nebula.yml"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: yes
+  notify: Restart nebula
+
+- name: Install nebula systemd service
+  ansible.builtin.template:
+    src: nebula.service.j2
+    dest: /etc/systemd/system/nebula.service
+    owner: root
+    group: root
+    mode: "0644"
+    backup: yes
+  notify: Restart nebula
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Flush handlers to restart nebula now (before later roles can fail)
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start nebula (remote)
+  ansible.builtin.systemd:
+    name: nebula
+    enabled: true
+    state: started

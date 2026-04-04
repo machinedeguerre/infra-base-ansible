@@ -1,0 +1,8 @@
+#cloud-config
+
+# qemu-guest-agent and cloud-init are already installed in the template.
+# qemu-guest-agent is udev-activated (started automatically when the
+# virtio-serial device is detected), so no explicit enable/start is needed.
+
+# Final message
+final_message: "Cloud-init completed successfully"

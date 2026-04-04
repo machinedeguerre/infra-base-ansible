@@ -1,0 +1,54 @@
+---
+# --- Create local cert/key if needed (controller) ---
+
+- name: Ensure nebula-cert exists on controller
+  ansible.builtin.command: "nebula-cert --help"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: nebula_rotate_needed | bool
+
+- name: Create local temp dir (controller)
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "nebula-sign-"
+  register: nebula_local_tmp
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool
+
+- name: Write CA key locally (controller temp)
+  ansible.builtin.copy:
+    content: "{{ nebula_ca_key_pem }}"
+    dest: "{{ nebula_local_tmp.path }}/ca.key"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool
+
+- name: Write CA cert locally (controller temp)
+  ansible.builtin.copy:
+    content: "{{ nebula_ca_crt_pem }}"
+    dest: "{{ nebula_local_tmp.path }}/ca.crt"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool
+
+- name: Sign host cert locally (controller)
+  ansible.builtin.command: >
+    nebula-cert sign
+    -ca-crt {{ nebula_local_tmp.path }}/ca.crt
+    -ca-key {{ nebula_local_tmp.path }}/ca.key
+    -name {{ nebula_name | default(inventory_hostname) }}
+    -networks {{ nebula_ip }}/16
+    -groups {{ nebula_groups | join(',') }}
+    {% if nebula_unsafe_networks | default([]) | length > 0 %}
+    -unsafe-networks {{ nebula_unsafe_networks | join(',') }}
+    {% endif %}
+    -duration {{ nebula_cert_duration }}
+    -out-crt {{ nebula_local_tmp.path }}/host.crt
+    -out-key {{ nebula_local_tmp.path }}/host.key
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool

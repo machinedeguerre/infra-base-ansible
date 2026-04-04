@@ -1,0 +1,73 @@
+---
+- name: Create nftables.d dir
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    mode: "0755"
+  when: wireguard_mode == 'server'
+
+- name: Check if /etc/nftables.conf exists
+  ansible.builtin.stat:
+    path: /etc/nftables.conf
+  register: nftables_conf_stat
+  when: wireguard_mode == 'server'
+
+- name: Create /etc/nftables.conf if it doesn't exist
+  ansible.builtin.file:
+    path: /etc/nftables.conf
+    state: touch
+    mode: "0644"
+  when: 
+    - wireguard_mode == 'server'
+    - not nftables_conf_stat.stat.exists
+
+- name: Include nftables.d to /etc/nftables.conf
+  ansible.builtin.lineinfile:
+    path: /etc/nftables.conf
+    regexp: '^include "/etc/nftables\.d/.*"$'
+    line: 'include "/etc/nftables.d/*.nft"'
+    insertafter: EOF
+    state: present
+  when: wireguard_mode == 'server'
+
+- name: NAT rule masquerading WireGuard network via public interface
+  ansible.builtin.copy:
+    dest: /etc/nftables.d/wireguard-nat.nft
+    mode: "0644"
+    content: |
+      table ip nat {
+        chain postrouting {
+          type nat hook postrouting priority srcnat;
+          oifname "{{ wireguard_server_public_interface }}" ip saddr {{ wireguard_network }} masquerade;
+        }
+      }
+  notify: Reload nftables
+  when: wireguard_mode == 'server'
+
+- name: Enable and start nftables
+  ansible.builtin.service:
+    name: nftables
+    state: started
+    enabled: true
+  when: wireguard_mode == 'server'
+
+- name: Activate IPv4 forwarding (persistent)
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^net\.ipv4\.ip_forward\s*='
+    line: 'net.ipv4.ip_forward = 1'
+    state: present
+    backup: yes
+  register: sysctl_conf_change
+  when: wireguard_mode == 'server'
+
+- name: Activate IPv4 forwarding (runtime)
+  ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+  changed_when: false
+  when: wireguard_mode == 'server'
+
+- name: Apply sysctl changes if config was modified
+  ansible.builtin.command: sysctl -p
+  when:
+    - wireguard_mode == 'server'
+    - sysctl_conf_change.changed

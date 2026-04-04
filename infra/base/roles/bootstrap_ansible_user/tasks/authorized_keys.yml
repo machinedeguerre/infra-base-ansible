@@ -1,0 +1,47 @@
+- name: Resolve default authorized_keys path
+  ansible.builtin.set_fact:
+    _bootstrap_default_keys_path: >-
+      {{ bootstrap_authorized_keys_src if bootstrap_authorized_keys_src is match('^/')
+         else playbook_dir ~ '/' ~ bootstrap_authorized_keys_src }}
+
+- name: Read default authorized_keys
+  ansible.builtin.set_fact:
+    _bootstrap_default_keys_raw: "{{ lookup('file', _bootstrap_default_keys_path) }}"
+
+- name: Check if project extra authorized_keys file exists
+  ansible.builtin.stat:
+    path: "{{ bootstrap_authorized_keys_extra_src }}"
+  register: _bootstrap_extra_keys_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Read project extra authorized_keys (if enabled and exists)
+  ansible.builtin.set_fact:
+    _bootstrap_extra_keys_raw: >-
+      {{
+        (bootstrap_authorized_keys_enable_extra | bool and _bootstrap_extra_keys_stat.stat.exists)
+        | ternary(lookup('file', bootstrap_authorized_keys_extra_src), '')
+      }}
+
+- name: Build combined authorized_keys list
+  ansible.builtin.set_fact:
+    _bootstrap_authorized_keys: >-
+      {{
+        (
+          (_bootstrap_default_keys_raw ~ '\n' ~ _bootstrap_extra_keys_raw)
+          .splitlines()
+          | map('trim')
+          | reject('equalto', '')
+          | reject('match', '^#')
+          | list
+        )
+      }}
+
+- name: Ensure authorized_keys are installed for ansible user
+  ansible.builtin.authorized_key:
+    user: "{{ bootstrap_ansible_user_name }}"
+    key: "{{ item }}"
+    state: present
+    exclusive: "{{ bootstrap_authorized_keys_exclusive | bool }}"
+  loop: "{{ _bootstrap_authorized_keys }}"

@@ -1,0 +1,32 @@
+---
+- name: Build certificate report
+  when: nebula_hostcrt_stat.stat.exists
+  block:
+    - name: Calculate days remaining
+      ansible.builtin.set_fact:
+        nebula_cert_days_remaining: >-
+          {{
+            (
+              (nebula_not_after_str | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()
+              - (ansible_facts.date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()
+            ) / 86400 | int
+          }}
+
+    - name: Store certificate report
+      ansible.builtin.set_fact:
+        nebula_cert_report:
+          name: "{{ nebula_cert_json_obj.details.name | default('unknown') }}"
+          ip: "{{ nebula_cert_ips | join(', ') }}"
+          groups: "{{ nebula_cert_groups | join(', ') | default('none', true) }}"
+          unsafe_networks: "{{ nebula_cert_unsafe_networks | join(', ') | default('none', true) }}"
+          not_after: "{{ nebula_not_after_str }}"
+          days_remaining: "{{ nebula_cert_days_remaining }}"
+          rotation_threshold: "{{ nebula_rotate_days }}"
+          rotation_needed: "{{ nebula_rotate_needed }}"
+
+- name: Store report for missing certificate
+  ansible.builtin.set_fact:
+    nebula_cert_report:
+      name: "{{ inventory_hostname }}"
+      status: "no certificate — will be generated"
+  when: not nebula_hostcrt_stat.stat.exists

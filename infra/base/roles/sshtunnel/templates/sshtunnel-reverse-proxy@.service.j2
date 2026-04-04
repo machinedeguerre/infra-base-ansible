@@ -1,0 +1,32 @@
+[Unit]
+Description=SSH Reverse Proxy Tunnel {{ item.name }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ sshtunnel_user }}
+Group={{ sshtunnel_user }}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# SSH command with reverse port forwarding
+ExecStart=/usr/bin/ssh \
+  -N -T \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile=/var/lib/{{ sshtunnel_user }}/.ssh/known_hosts \
+  -o IdentityFile=/var/lib/{{ sshtunnel_user }}/.ssh/id_ed25519 \
+  -R {{ item.remote_port }}:localhost:{{ item.local_port }} \
+  -v \
+  {{ item.user | default(sshtunnel_user) }}@{{ item.host }}{% if item.port | default(22) != 22 %} -p {{ item.port }}{% endif %}
+
+# Stop the service if SSH exits
+ExecStop=/bin/kill -TERM $MAINPID
+
+[Install]
+WantedBy=multi-user.target

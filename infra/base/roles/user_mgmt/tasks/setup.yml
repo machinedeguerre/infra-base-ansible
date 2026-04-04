@@ -1,0 +1,12 @@
+---
+- name: "Build default user from scalar variables"
+  ansible.builtin.set_fact:
+    _user_mgmt_default_user:
+      username: "{{ user_mgmt_default_username }}"
+      authorized_keys_src: "{{ user_mgmt_default_authorized_keys_src }}"
+      sudo: "{{ user_mgmt_default_sudo }}"
+      passwordless_sudo: "{{ user_mgmt_default_passwordless_sudo }}"
+
+- name: "Merge default and consumer users"
+  ansible.builtin.set_fact:
+    user_mgmt_all_users: "{{ [_user_mgmt_default_user] + (user_mgmt_users | default([])) }}"

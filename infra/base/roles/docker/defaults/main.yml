@@ -1,0 +1,16 @@
+---
+# Docker packages to install from the official Docker repository
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Additional users to add to the docker group (besides the default user)
+# The default user (user_mgmt_default_username) is automatically added.
+# Example:
+# docker_additional_users:
+#   - "deploy"
+#   - "ci"0
+docker_additional_users: []

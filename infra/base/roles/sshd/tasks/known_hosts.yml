@@ -1,0 +1,23 @@
+- name: Read base known_hosts from role
+  ansible.builtin.set_fact:
+    _ssh_known_hosts_base: >-
+      {{ lookup('ansible.builtin.file', role_path ~ '/files/' ~ ssh_system_known_hosts_base_file) }}
+
+- name: Read extra known_hosts files from consumer (controller-local)
+  ansible.builtin.set_fact:
+    _ssh_known_hosts_extra_files_content: >-
+      {{
+        ( _ssh_known_hosts_extra_files_content | default([]) )
+        + [ lookup('ansible.builtin.file', (item if item.startswith('/') else (playbook_dir ~ '/' ~ item))) ]
+      }}
+  loop: "{{ ssh_system_known_hosts_extra_files }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Render system-wide known_hosts (base + extra files + extra lines)
+  ansible.builtin.template:
+    src: ssh_known_hosts.static.j2
+    dest: "{{ ssh_system_known_hosts_path }}"
+    owner: root
+    group: root
+    mode: "0644"

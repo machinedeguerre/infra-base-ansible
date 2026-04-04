@@ -1,0 +1,105 @@
+- name: Ensure /etc/defaultdomain is absent
+  ansible.builtin.file:
+    path: /etc/defaultdomain
+    state: absent
+
+- name: Ensure NIS domainname is empty
+  ansible.builtin.command: domainname ""
+  changed_when: false
+
+- name: Verify NIS domainname is empty
+  ansible.builtin.command: domainname
+  register: _domainname_check
+  changed_when: false
+  failed_when: _domainname_check.stdout not in ["", "(none)"]
+
+- name: Set hostname to inventory name
+  ansible.builtin.hostname:
+    name: "{{ network_hostname }}"
+
+- name: Ensure ipv4 localhost is mapped in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.0\.1\s+'
+    line: "127.0.0.1 localhost"
+    create: true
+
+- name: Ensure ipv6 localhost is mapped in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^::1\s+'
+    line: "::1 localhost ip6-localhost ip6-loopback"
+    create: true
+
+- name: Determine IP to map inventory hostname to (nebula_ip > network_public_ip > default route interface IP)
+  ansible.builtin.set_fact:
+    _network_inventory_ip: >-
+      {{
+        (nebula_ip is defined and nebula_ip is not none and (nebula_ip | string | trim | length > 0))
+        | ternary(
+            (nebula_ip | string | trim),
+            (network_public_ip is not none and (network_public_ip | string | trim | length > 0))
+            | ternary(
+                (network_public_ip | string | trim),
+                ansible_facts['default_ipv4']['address']
+              )
+          )
+      }}
+
+- name: Ensure inventory hostname is mapped in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^\s*{{ _network_inventory_ip | regex_escape() }}\s+{{ inventory_hostname | regex_escape() }}(\s|$$)'
+    line: "{{ _network_inventory_ip }} {{ inventory_hostname }}{% if network_hosts_inventory_aliases|length > 0 %} {{ network_hosts_inventory_aliases | join(' ') }}{% endif %}"
+    create: true
+
+- name: Add extra /etc/hosts entries
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE network_baseline extra"
+    create: true
+    block: |
+      {% for e in network_hosts_entries %}
+      {{ e.ip }} {{ e.names | join(' ') }}
+      {% endfor %}
+  when: (network_hosts_entries | length) > 0
+
+- name: Install systemd-resolved
+  ansible.builtin.apt:
+    name: systemd-resolved
+    state: present
+    update_cache: true
+
+- name: Ensure systemd-resolved is enabled and started
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    enabled: true
+    state: started
+
+- name: Ensure resolved drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure systemd-resolved DNS + DNSOverTLS
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/90-ansible-network-baseline.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Resolve]
+      DNS={{ network_dns_servers | join(' ') }}
+      DNSOverTLS={{ 'yes' if (network_dns_over_tls | bool) else 'no' }}
+  notify: Restart systemd-resolved
+
+# Make sure resolv.conf points to systemd-resolved
+- name: Ensure /etc/resolv.conf is managed by systemd-resolved
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: link
+    force: true
+    src: /run/systemd/resolve/stub-resolv.conf

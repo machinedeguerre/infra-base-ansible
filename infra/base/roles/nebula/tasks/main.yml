@@ -1,0 +1,27 @@
+---
+- name: Validate required variables
+  ansible.builtin.include_tasks: validation.yml
+
+- name: Install nebula package
+  ansible.builtin.include_tasks: install.yml
+
+- name: Setup directories
+  ansible.builtin.include_tasks: directories.yml
+
+- name: Install CA certificate
+  ansible.builtin.include_tasks: ca_cert.yml
+
+- name: Check certificate rotation
+  ansible.builtin.include_tasks: cert_rotation_check.yml
+
+- name: Report certificate status
+  ansible.builtin.include_tasks: cert_report.yml
+
+- name: Generate certificates if needed
+  ansible.builtin.include_tasks: cert_generate.yml
+
+- name: Upload certificates if needed
+  ansible.builtin.include_tasks: cert_upload.yml
+
+- name: Configure and manage service
+  ansible.builtin.include_tasks: config_service.yml

@@ -1,0 +1,12 @@
+---
+- name: "Validate user definitions"
+  ansible.builtin.assert:
+    that:
+      - item.username is string
+      - item.uid is not defined or item.uid is number
+      - item.sudo is boolean
+      - item.passwordless_sudo is boolean
+      - item.authorized_keys_src is not defined or item.authorized_keys_src is string
+      - (not item.passwordless_sudo) or item.sudo
+    fail_msg: "Invalid user definition: {{ item }}"
+  loop: "{{ user_mgmt_all_users }}"

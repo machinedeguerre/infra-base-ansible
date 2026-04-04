@@ -1,0 +1,22 @@
+---
+- name: "Check if UID 1000 exists"
+  ansible.builtin.command: getent passwd 1000
+  register: _uid_1000_check
+  failed_when: false
+  changed_when: false
+
+- name: "Check if default username exists"
+  ansible.builtin.command: getent passwd {{ _user_mgmt_default_user.username }}
+  register: _user_check
+  failed_when: false
+  changed_when: false
+
+- name: "Create default user only if safe"
+  ansible.builtin.user:
+    name: "{{ _user_mgmt_default_user.username }}"
+    uid: 1000
+    state: present
+    create_home: true
+  when:
+    - _uid_1000_check.rc != 0
+    - _user_check.rc != 0

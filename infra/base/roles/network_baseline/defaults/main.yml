@@ -1,0 +1,17 @@
+# Hostname policy
+network_hostname: "{{ inventory_hostname }}"
+
+# /etc/hosts extra entries
+# Each item: { ip: "10.0.0.10", names: ["db01", "db01.example.com"] }
+network_hosts_entries: []
+
+# For setting the inventory hostname in /etc/hosts:
+network_public_ip: null # Optional override if you want a specific IP instead of auto-detection for the inventory hostname mapping in /etc/hosts
+network_hosts_inventory_aliases:
+  - "{{ inventory_hostname_short }}"
+
+# systemd-resolved / DNS-over-TLS
+network_dns_over_tls: true
+network_dns_servers:
+  - "1.1.1.1"
+  - "1.0.0.1"

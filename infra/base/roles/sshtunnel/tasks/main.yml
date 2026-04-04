@@ -1,0 +1,67 @@
+---
+# --- Restrictive shell ---
+
+- name: Deploy tunnel-shell script
+  ansible.builtin.template:
+    src: tunnel-shell.sh.j2
+    dest: /usr/local/bin/tunnel-shell.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+# --- System user ---
+
+- name: Create tunnel system group
+  ansible.builtin.group:
+    name: "{{ sshtunnel_user }}"
+    gid: "{{ sshtunnel_user_uid }}"
+    system: true
+    state: present
+
+- name: Create tunnel system user
+  ansible.builtin.user:
+    name: "{{ sshtunnel_user }}"
+    uid: "{{ sshtunnel_user_uid }}"
+    group: "{{ sshtunnel_user }}"
+    home: "/var/lib/{{ sshtunnel_user }}"
+    create_home: true
+    shell: /usr/local/bin/tunnel-shell.sh
+    system: true
+    password: "!"
+    state: present
+
+# --- authorized_keys (outside /home) ---
+
+- name: Ensure /etc/ssh/authorized_keys.d directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/authorized_keys.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write authorized_keys file for tunnel user
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "/etc/ssh/authorized_keys.d/{{ sshtunnel_user }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: sshtunnel_authorized_keys | default([]) | length > 0
+
+# --- sshd drop-in ---
+
+- name: Deploy sshd drop-in for tunnel user
+  ansible.builtin.template:
+    src: sshd-tunnel.conf.j2
+    dest: /etc/ssh/sshd_config.d/20-tunnel-user.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sshd
+
+# --- Reverse proxy tunnels ---
+
+- name: Configure reverse proxy tunnels
+  ansible.builtin.include_tasks: reverse_proxies.yml
+  when: sshtunnel_reverse_proxies is defined and sshtunnel_reverse_proxies | length > 0

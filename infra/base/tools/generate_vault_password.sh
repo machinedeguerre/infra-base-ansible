@@ -31,6 +31,6 @@ if [[ ${#gpg_args[@]} -eq 0 ]]; then
 fi
 
 openssl rand -base64 "$PASS_BYTES" \
-  | gpg --batch --yes --encrypt "${gpg_args[@]}" --output "$OUT_FILE"
+  | gpg --batch --yes --trust-model always --encrypt "${gpg_args[@]}" --output "$OUT_FILE"
 
 popd >/dev/null

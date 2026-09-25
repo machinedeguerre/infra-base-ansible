@@ -64,18 +64,6 @@
       {% endfor %}
   when: (network_hosts_entries | length) > 0
 
-- name: Install systemd-resolved
-  ansible.builtin.apt:
-    name: systemd-resolved
-    state: present
-    update_cache: true
-
-- name: Ensure systemd-resolved is enabled and started
-  ansible.builtin.systemd:
-    name: systemd-resolved
-    enabled: true
-    state: started
-
 - name: Ensure resolved drop-in directory exists
   ansible.builtin.file:
     path: /etc/systemd/resolved.conf.d
@@ -95,6 +83,21 @@
       DNS={{ network_dns_servers | join(' ') }}
       DNSOverTLS={{ 'yes' if (network_dns_over_tls | bool) else 'no' }}
   notify: Restart systemd-resolved
+
+- name: Install systemd-resolved
+  ansible.builtin.apt:
+    name: systemd-resolved
+    state: present
+    update_cache: true
+
+- name: Ensure systemd-resolved is enabled and started
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    enabled: true
+    state: started
+
+- name: Flush handlers to apply DNS config before dependent tasks
+  ansible.builtin.meta: flush_handlers
 
 # Make sure resolv.conf points to systemd-resolved
 - name: Ensure /etc/resolv.conf is managed by systemd-resolved

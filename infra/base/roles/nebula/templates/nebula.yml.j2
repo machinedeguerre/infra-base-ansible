@@ -75,6 +75,18 @@ firewall:
       group: sysop
 {% endif %}
 
+{% if 'webhost' in nebula_groups %}
+    # Allow HTTP/HTTPS inbound to webhost from any nebula peer
+    # (intentionally no local_cidr -- traffic to VM subnets must go via haproxy,
+    # not be exposed directly over the overlay)
+    - port: 80
+      proto: tcp
+      host: any
+    - port: 443
+      proto: tcp
+      host: any
+{% endif %}
+
 {% if nebula_unsafe_networks | default([]) | length > 0 %}
     # Allow all traffic from sysop group to VM subnets
 {% for subnet in nebula_unsafe_networks %}

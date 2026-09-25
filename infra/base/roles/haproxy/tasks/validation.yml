@@ -1,0 +1,43 @@
+---
+- name: Each site must have name, domains, upstreams and cert
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.domains is defined and (item.domains | length) > 0
+      - item.upstreams is defined and (item.upstreams | length) > 0
+      - item.cert is defined and item.cert | length > 0
+    fail_msg: >-
+      haproxy_sites entry must define name, domains (>=1), upstreams (>=1) and cert.
+  loop: "{{ haproxy_sites }}"
+  loop_control:
+    label: "{{ item.name | default('<unnamed>') }}"
+
+- name: Each TCP forward must have name, listen_port, upstream_host and upstream_port
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.listen_port is defined
+      - item.upstream_host is defined and item.upstream_host | length > 0
+      - item.upstream_port is defined
+    fail_msg: >-
+      haproxy_tcp_forwards entry must define name, listen_port, upstream_host and upstream_port.
+  loop: "{{ haproxy_tcp_forwards }}"
+  loop_control:
+    label: "{{ item.name | default('<unnamed>') }}"
+
+- name: Every referenced cert must exist in wildcard_certs with fullchain and privkey
+  ansible.builtin.assert:
+    that:
+      - wildcard_certs[item.cert] is defined
+      - wildcard_certs[item.cert].fullchain is defined
+      - wildcard_certs[item.cert].fullchain | length > 0
+      - wildcard_certs[item.cert].privkey is defined
+      - wildcard_certs[item.cert].privkey | length > 0
+    fail_msg: >-
+      Site '{{ item.name }}' references cert '{{ item.cert }}' which is not
+      present in wildcard_certs (or missing fullchain/privkey). Check that
+      inventory/group_vars/all/wildcard_cert.{{ item.cert }}.vault.yml exists
+      and decrypts correctly.
+  loop: "{{ haproxy_sites }}"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.cert }}"

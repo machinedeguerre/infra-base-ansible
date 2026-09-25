@@ -1,0 +1,89 @@
+# {{ ansible_managed }}
+# Managed by infra.base.haproxy — do not edit by hand.
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    maxconn 4096
+    ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    option  forwardfor
+    option  http-server-close
+    timeout connect 5s
+    timeout client  60s
+    timeout server  60s
+    timeout http-request 10s
+
+# ---------------------------------------------------------------------------
+# Port 80 — redirect everything to HTTPS
+# ---------------------------------------------------------------------------
+frontend http_in
+    bind *:80
+    mode http
+    http-request redirect scheme https code 301
+
+# ---------------------------------------------------------------------------
+# Port 443 — TLS termination with SNI cert selection
+# ---------------------------------------------------------------------------
+frontend https_in
+    bind *:443 ssl crt {{ haproxy_certs_dir }}/ alpn h2,http/1.1
+    mode http
+    http-request set-header X-Forwarded-Proto https
+{% for site in haproxy_sites %}
+
+    # Site: {{ site.name }}
+{% for d in site.domains %}
+    acl host_{{ site.name }} hdr(host) -i {{ d }}
+{% endfor %}
+    use_backend be_{{ site.name }} if host_{{ site.name }}
+{% endfor %}
+    # No default_backend — unknown Host headers get HAProxy's default 503.
+
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
+{% for site in haproxy_sites %}
+backend be_{{ site.name }}
+    mode http
+    balance roundrobin
+{% for u in site.upstreams %}
+{%   set scheme = u | urlsplit('scheme') %}
+{%   set host = u | urlsplit('hostname') %}
+{%   set port = u | urlsplit('port') %}
+{%   if not port %}{%   set port = 443 if scheme == 'https' else 80 %}{%   endif %}
+    server {{ site.name }}_{{ loop.index }} {{ host }}:{{ port }} check{% if scheme == 'https' %} ssl verify none{% endif %}
+
+{% endfor %}
+{% endfor %}
+{% if haproxy_tcp_forwards %}
+
+# ---------------------------------------------------------------------------
+# Raw TCP port forwards
+# ---------------------------------------------------------------------------
+{% for fwd in haproxy_tcp_forwards %}
+frontend tcp_{{ fwd.name }}_in
+    mode tcp
+    bind *:{{ fwd.listen_port }}
+    option tcplog
+    timeout client 1h
+    default_backend tcp_be_{{ fwd.name }}
+
+backend tcp_be_{{ fwd.name }}
+    mode tcp
+    timeout server 1h
+    server {{ fwd.name }} {{ fwd.upstream_host }}:{{ fwd.upstream_port }}
+
+{% endfor %}
+{% endif %}

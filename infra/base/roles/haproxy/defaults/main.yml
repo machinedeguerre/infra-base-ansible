@@ -1,0 +1,39 @@
+---
+# List of sites to serve through HAProxy. Each entry needs:
+#   - name:      internal identifier (used for backend names, ACLs)
+#   - domains:   one or more hostnames to match on the Host header
+#   - upstreams: one or more URLs of backend servers (http or https)
+#   - cert:      key into wildcard_certs dict (the wildcard domain name,
+#                e.g. "example.com" for *.example.com)
+#
+# Example:
+# haproxy_sites:
+#   - name: app1
+#     domains:
+#       - app1.example.com
+#     upstreams:
+#       - http://192.0.2.10/
+#     cert: example.com
+haproxy_sites: []
+
+# Wildcard certificates (typically merged in from group_vars/all/wildcard_cert.*.vault.yml
+# files written by `infratool generate_wildcard_cert`). Each key is the bare wildcard
+# domain (e.g. "example.com") and each value is { fullchain: <pem>, privkey: <pem> }.
+wildcard_certs: {}
+
+# Raw TCP port forwards (mode tcp). Each entry needs:
+#   - name:          internal identifier (used for frontend/backend names)
+#   - listen_port:   port to bind on this host
+#   - upstream_host: address to forward to
+#   - upstream_port: port on the upstream host
+#
+# Example (expose SSH on port 2222, forwarded to 192.0.2.10:22):
+# haproxy_tcp_forwards:
+#   - name: ssh_app1
+#     listen_port: 2222
+#     upstream_host: 192.0.2.10
+#     upstream_port: 22
+haproxy_tcp_forwards: []
+
+haproxy_config_dir: /etc/haproxy
+haproxy_certs_dir: /etc/haproxy/certs

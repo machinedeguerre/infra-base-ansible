@@ -1,0 +1,12 @@
+---
+- name: Validate configuration
+  ansible.builtin.include_tasks: validation.yml
+
+- name: Install haproxy
+  ansible.builtin.include_tasks: install.yml
+
+- name: Deploy certificates
+  ansible.builtin.include_tasks: certs.yml
+
+- name: Configure and manage service
+  ansible.builtin.include_tasks: config_service.yml

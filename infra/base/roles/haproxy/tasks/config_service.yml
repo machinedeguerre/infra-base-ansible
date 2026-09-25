@@ -1,0 +1,17 @@
+---
+- name: Render haproxy.cfg (with syntax validation)
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: "{{ haproxy_config_dir }}/haproxy.cfg"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    validate: "haproxy -c -f %s"
+  notify: Reload haproxy
+
+- name: Enable and start haproxy
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: true
+    state: started

@@ -25,3 +25,7 @@
 
 - name: Configure and manage service
   ansible.builtin.include_tasks: config_service.yml
+
+- name: Configure LAN gateway (NAT from overlay to local subnets)
+  ansible.builtin.include_tasks: lan_gateway.yml
+  when: nebula_lan_gateways | length > 0

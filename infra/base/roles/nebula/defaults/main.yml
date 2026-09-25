@@ -31,3 +31,19 @@ nebula_unsafe_networks: []
 #   - route: "172.25.1.0/24"
 #     via: "172.24.1.1"
 nebula_unsafe_routes: []
+
+# LAN gateways - masquerade traffic arriving over the Nebula overlay out to
+# local physical subnets. Configure on hosts that act as a gateway from the
+# overlay into their LAN. Strictly one-way: LAN devices see the gateway's own
+# LAN address (stateful NAT) and cannot initiate connections into the overlay.
+# Each entry:
+#   - subnet: CIDR of the local LAN to expose (e.g. "192.168.1.0/24")
+#     iface: outgoing network interface on this host (e.g. "eno1")
+# The subnet must also be listed in nebula_unsafe_networks on the same host
+# (embedded in the cert and opens the sysop firewall rule), and peers need a
+# matching entry in nebula_unsafe_routes to route the subnet via this host.
+# Example:
+# nebula_lan_gateways:
+#   - subnet: "192.168.1.0/24"
+#     iface: "eno1"
+nebula_lan_gateways: []

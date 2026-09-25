@@ -1,0 +1,18 @@
+# Managed by Ansible (nebula role, lan_gateway.yml)
+# NAT traffic that arrived over the Nebula overlay (tun0) out to local LAN
+# subnets. One-way by design: stateful masquerade only, no inbound NAT.
+table ip nebula_lan_gw {
+  chain postrouting {
+    type nat hook postrouting priority srcnat;
+{% for gw in nebula_lan_gateways %}
+    iifname "tun0" oifname "{{ gw.iface }}" ip daddr {{ gw.subnet }} masquerade;
+{% endfor %}
+  }
+
+  # Clamp MSS on forwarded TCP SYN packets to 1260 so TCP works through the
+  # Nebula tunnel (tun0 MTU 1300): 1260 + TCP 20 + IP 20 = 1300 bytes.
+  chain forward {
+    type filter hook forward priority mangle;
+    tcp flags syn tcp option maxseg size set 1260;
+  }
+}

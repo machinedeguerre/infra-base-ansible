@@ -1,0 +1,66 @@
+---
+- name: Each LAN gateway entry must define subnet and iface
+  ansible.builtin.assert:
+    that:
+      - item.subnet is defined and item.subnet | length > 0
+      - item.iface is defined and item.iface | length > 0
+    fail_msg: nebula_lan_gateways entry must define subnet and iface.
+  loop: "{{ nebula_lan_gateways }}"
+  loop_control:
+    label: "{{ item.subnet | default('<no subnet>') }}"
+
+- name: LAN gateway subnets must be listed in nebula_unsafe_networks
+  ansible.builtin.assert:
+    that:
+      - item.subnet in (nebula_unsafe_networks | default([]))
+    fail_msg: >-
+      LAN gateway subnet {{ item.subnet }} must also be listed in
+      nebula_unsafe_networks on this host, so it gets embedded in the Nebula
+      certificate and allowed by the Nebula firewall.
+  loop: "{{ nebula_lan_gateways }}"
+  loop_control:
+    label: "{{ item.subnet }}"
+
+- name: Install nftables
+  ansible.builtin.package:
+    name: nftables
+    state: present
+
+- name: Activate IPv4 forwarding (persistent via sysctl.d)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-nebula-lan-gateway.conf
+    content: |
+      # Managed by Ansible (nebula role)
+      net.ipv4.ip_forward = 1
+    mode: "0644"
+
+- name: Apply sysctl settings
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+- name: Create nftables.d dir
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    mode: "0755"
+
+- name: Include nftables.d in /etc/nftables.conf
+  ansible.builtin.lineinfile:
+    path: /etc/nftables.conf
+    regexp: '^include "/etc/nftables\.d/.*"$'
+    line: 'include "/etc/nftables.d/*.nft"'
+    insertafter: EOF
+    state: present
+
+- name: NAT masquerading from Nebula overlay to LAN subnets
+  ansible.builtin.template:
+    src: nebula-lan-gateway.nft.j2
+    dest: /etc/nftables.d/nebula-lan-gateway.nft
+    mode: "0644"
+  notify: Reload nftables
+
+- name: Enable and start nftables
+  ansible.builtin.service:
+    name: nftables
+    state: started
+    enabled: true

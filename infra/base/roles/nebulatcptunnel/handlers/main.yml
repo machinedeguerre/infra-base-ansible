@@ -1,0 +1,11 @@
+- name: Restart chisel
+  ansible.builtin.systemd:
+    name: chisel
+    state: restarted
+    daemon_reload: true
+  ignore_errors: true
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded

@@ -1,0 +1,38 @@
+---
+# HTTP redirect for non-tunnel traffic: nginx on port 80 that 302-redirects
+# every request to nebulatcptunnel_redirect_url. This is what non-tunnel web
+# requests receive (directly on 80, and via chisel's --backend on 443).
+
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Remove nginx default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Deploy redirect site
+  ansible.builtin.template:
+    src: nginx-redirect.conf.j2
+    dest: /etc/nginx/sites-available/nebulatcptunnel-redirect.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable redirect site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/nebulatcptunnel-redirect.conf
+    dest: /etc/nginx/sites-enabled/nebulatcptunnel-redirect.conf
+    state: link
+  notify: Reload nginx
+
+- name: Ensure nginx is enabled and running
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started

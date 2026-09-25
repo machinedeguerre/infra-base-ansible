@@ -1,0 +1,84 @@
+---
+- name: Determine architecture for chisel binary
+  ansible.builtin.set_fact:
+    nebulatcptunnel_arch: >-
+      {{
+        {
+          'x86_64': 'amd64',
+          'aarch64': 'arm64',
+          'armv7l': 'armv7',
+          'armv6l': 'armv6'
+        }[ansible_facts['architecture']] | default('amd64')
+      }}
+
+- name: Set chisel download URL
+  ansible.builtin.set_fact:
+    nebulatcptunnel_download_url: >-
+      https://github.com/jpillora/chisel/releases/download/v{{ nebulatcptunnel_version }}/chisel_{{ nebulatcptunnel_version }}_linux_{{ nebulatcptunnel_arch }}.gz
+
+- name: Check if chisel binary exists
+  ansible.builtin.stat:
+    path: "{{ nebulatcptunnel_binary_path }}"
+  register: nebulatcptunnel_binary_stat
+
+- name: Get installed chisel version
+  ansible.builtin.command: "{{ nebulatcptunnel_binary_path }} --version"
+  register: nebulatcptunnel_version_check
+  failed_when: false
+  changed_when: false
+  when: nebulatcptunnel_binary_stat.stat.exists
+
+- name: Decide whether chisel needs (re)installation
+  ansible.builtin.set_fact:
+    nebulatcptunnel_needs_install: >-
+      {{
+        not nebulatcptunnel_binary_stat.stat.exists or
+        nebulatcptunnel_version_check.rc != 0 or
+        (nebulatcptunnel_version_check.stdout is defined and nebulatcptunnel_version_check.stdout is not search(nebulatcptunnel_version))
+      }}
+
+- name: Create temporary directory for chisel installation
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "chisel-install-"
+  register: nebulatcptunnel_install_tmp
+  when: nebulatcptunnel_needs_install | bool
+
+- name: Download chisel binary archive
+  ansible.builtin.get_url:
+    url: "{{ nebulatcptunnel_download_url }}"
+    dest: "{{ nebulatcptunnel_install_tmp.path }}/chisel.gz"
+    mode: "0644"
+    timeout: 30
+  when:
+    - nebulatcptunnel_needs_install | bool
+    - nebulatcptunnel_install_tmp is defined
+
+- name: Decompress chisel binary
+  ansible.builtin.command: "gunzip -f {{ nebulatcptunnel_install_tmp.path }}/chisel.gz"
+  args:
+    creates: "{{ nebulatcptunnel_install_tmp.path }}/chisel"
+  when:
+    - nebulatcptunnel_needs_install | bool
+    - nebulatcptunnel_install_tmp is defined
+
+- name: Install chisel binary
+  ansible.builtin.copy:
+    src: "{{ nebulatcptunnel_install_tmp.path }}/chisel"
+    dest: "{{ nebulatcptunnel_binary_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+  when:
+    - nebulatcptunnel_needs_install | bool
+    - nebulatcptunnel_install_tmp is defined
+  notify: Restart chisel
+
+- name: Cleanup temporary directory
+  ansible.builtin.file:
+    path: "{{ nebulatcptunnel_install_tmp.path }}"
+    state: absent
+  when:
+    - nebulatcptunnel_needs_install | bool
+    - nebulatcptunnel_install_tmp is defined

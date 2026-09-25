@@ -1,0 +1,54 @@
+---
+# infra.base.nebulatcptunnel — HTTPS tunnel that carries Nebula's UDP transport
+# over TCP/443 (via chisel), so a Nebula node can be reached from corporate
+# networks that only permit http/https egress.
+#
+# Deploy this on a PUBLIC host that is ALSO a Nebula lighthouse+relay (so a
+# tunnelled client can reach the whole mesh through the single tunnel).
+
+nebulatcptunnel_version: "1.10.1"
+nebulatcptunnel_binary_path: /usr/local/bin/chisel
+
+# Dedicated unprivileged service account + state/cache dir (Let's Encrypt certs
+# are cached under $HOME/.cache/chisel).
+nebulatcptunnel_user: chisel
+nebulatcptunnel_group: chisel
+nebulatcptunnel_config_dir: /etc/chisel
+nebulatcptunnel_state_dir: /var/lib/chisel
+
+# Public FQDN for the tunnel. Setting this is what ENABLES the role on a host
+# (the playbook runs it when nebulatcptunnel_tls_domain is non-empty, mirroring
+# how nebula_ip / haproxy_sites gate their roles). It MUST have a DNS A/AAAA
+# record pointing at this host's public IP — chisel uses it to auto-provision and
+# renew a Let's Encrypt certificate via TLS-ALPN-01 on the listen port below.
+# e.g. "tunnel.example.com"
+nebulatcptunnel_tls_domain: ""
+
+nebulatcptunnel_listen_host: "0.0.0.0"
+nebulatcptunnel_listen_port: 443
+
+# The local Nebula UDP listener the tunnel forwards incoming clients into.
+# Defaults to this host's Nebula listen port (nebula_listen_port).
+nebulatcptunnel_forward_target_host: "127.0.0.1"
+nebulatcptunnel_forward_target_port: "{{ nebula_listen_port | default(4242) }}"
+
+# Credentials the tunnel client must present. These empty placeholders only
+# declare the interface — set the real values in a vault file
+# (host_vars/<host>/nebulatcptunnel.vault.yml, via
+# `infratool generate_nebulatcptunnel_auth <host>`), which overrides these.
+# REQUIRED: the role fails validation if they are still empty.
+nebulatcptunnel_auth_user: ""
+nebulatcptunnel_auth_password: ""
+
+# WebSocket/UDP keepalive — keeps idle tunnels and NAT mappings alive.
+nebulatcptunnel_keepalive: "15s"
+
+# HTTP redirect for non-tunnel web traffic. Install nginx on port 80 that
+# 302-redirects every request to nebulatcptunnel_redirect_url (request path +
+# query preserved). The host exists to serve the tunnel, so stray web requests —
+# on both port 80 (nginx directly) and port 443 (chisel reverse-proxies
+# non-tunnel requests to http://127.0.0.1:80) — are sent to a configured
+# destination (e.g. your main site) instead of returning a bare 404. A trailing
+# slash on the URL is fine; it is stripped before the request URI is appended.
+nebulatcptunnel_redirect_enabled: true
+nebulatcptunnel_redirect_url: "https://example.org/"

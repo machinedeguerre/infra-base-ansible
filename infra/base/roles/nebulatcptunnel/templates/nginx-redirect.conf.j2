@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# 302-redirect all non-tunnel HTTP traffic to the configured URL.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    return 302 {{ nebulatcptunnel_redirect_url | regex_replace('/$', '') }}$request_uri;
+}

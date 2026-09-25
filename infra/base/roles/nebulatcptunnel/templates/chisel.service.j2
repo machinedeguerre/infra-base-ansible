@@ -1,0 +1,36 @@
+[Unit]
+Description=chisel HTTPS tunnel (Nebula-over-443)
+Documentation=https://github.com/jpillora/chisel
+After=network-online.target
+Wants=network-online.target
+{% if nebulatcptunnel_redirect_enabled | bool %}
+After=nginx.service
+Wants=nginx.service
+{% endif %}
+
+[Service]
+Type=simple
+User={{ nebulatcptunnel_user }}
+Group={{ nebulatcptunnel_group }}
+Environment=HOME={{ nebulatcptunnel_state_dir }}
+ExecStart={{ nebulatcptunnel_binary_path }} server --host {{ nebulatcptunnel_listen_host }} --port {{ nebulatcptunnel_listen_port }} --tls-domain {{ nebulatcptunnel_tls_domain }} --keepalive {{ nebulatcptunnel_keepalive }} --backend http://127.0.0.1:80 --authfile {{ nebulatcptunnel_config_dir }}/users.json
+
+Restart=on-failure
+RestartSec=5s
+
+# Allow binding the privileged port {{ nebulatcptunnel_listen_port }} without full root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ nebulatcptunnel_state_dir }}
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+
+[Install]
+WantedBy=multi-user.target

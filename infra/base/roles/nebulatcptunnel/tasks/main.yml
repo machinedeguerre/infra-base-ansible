@@ -1,0 +1,13 @@
+---
+- name: Validate required variables
+  ansible.builtin.include_tasks: validation.yml
+
+- name: Install chisel binary
+  ansible.builtin.include_tasks: install.yml
+
+- name: Configure HTTP redirect for non-tunnel traffic
+  ansible.builtin.include_tasks: nginx.yml
+  when: nebulatcptunnel_redirect_enabled | bool
+
+- name: Configure and manage service
+  ansible.builtin.include_tasks: config_service.yml

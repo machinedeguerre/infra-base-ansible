@@ -1,0 +1,58 @@
+---
+- name: Create chisel system group
+  ansible.builtin.group:
+    name: "{{ nebulatcptunnel_group }}"
+    system: true
+
+- name: Create chisel system user
+  ansible.builtin.user:
+    name: "{{ nebulatcptunnel_user }}"
+    group: "{{ nebulatcptunnel_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ nebulatcptunnel_state_dir }}"
+    create_home: false
+
+- name: Create chisel directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ nebulatcptunnel_user }}"
+    group: "{{ nebulatcptunnel_group }}"
+    mode: "0750"
+  loop:
+    - "{{ nebulatcptunnel_config_dir }}"
+    - "{{ nebulatcptunnel_state_dir }}"
+
+- name: Render chisel authfile
+  ansible.builtin.template:
+    src: chisel-users.json.j2
+    dest: "{{ nebulatcptunnel_config_dir }}/users.json"
+    owner: "{{ nebulatcptunnel_user }}"
+    group: "{{ nebulatcptunnel_group }}"
+    mode: "0640"
+  no_log: true
+  notify: Restart chisel
+
+- name: Install chisel systemd service
+  ansible.builtin.template:
+    src: chisel.service.j2
+    dest: /etc/systemd/system/chisel.service
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: Restart chisel
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Flush handlers to (re)start chisel now
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start chisel
+  ansible.builtin.systemd:
+    name: chisel
+    enabled: true
+    state: started

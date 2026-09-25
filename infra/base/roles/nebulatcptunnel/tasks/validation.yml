@@ -1,0 +1,19 @@
+---
+- name: Ensure a Let's Encrypt domain is configured
+  ansible.builtin.assert:
+    that:
+      - nebulatcptunnel_tls_domain is defined
+      - nebulatcptunnel_tls_domain | length > 0
+    fail_msg: >-
+      nebulatcptunnel_tls_domain must be set to the public FQDN that resolves to
+      this host (e.g. "tunnel.example.com"). chisel uses it for Let's Encrypt.
+
+- name: Ensure tunnel credentials are configured
+  ansible.builtin.assert:
+    that:
+      - nebulatcptunnel_auth_user | length > 0
+      - nebulatcptunnel_auth_password | length > 0
+    fail_msg: >-
+      nebulatcptunnel_auth_user and nebulatcptunnel_auth_password must be set
+      (keep them in a vault file, e.g. host_vars/<host>/nebulatcptunnel.vault.yml).
+    quiet: true

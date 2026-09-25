@@ -91,6 +91,106 @@ $ mkdir playbooks
 
 Same format as gnu pass.
 
+## 8. Create an ansible vault password (encrypted by gpg)
 
+Your vault password is stored in `.vault-pass.gpg`,
+which is encrypted to the gpg keys in `.gpg-id`.
 
+To create it:
+
+```
+$ ./infratool generate_vault_password
+```
+
+## 9. Voilà!
+
+Start using the collection roles!
+
+## Infratool commands
+
+Run `./infratool` without arguments to list available commands.
+
+### generate_vault_password
+
+Generates a random vault password and encrypts it with GPG to `.vault-pass.gpg`. The GPG recipients are read from `.gpg-id` in the project root.
+
+```
+./infratool generate_vault_password
+```
+
+### generate_root_password `<host>`
+
+Generates a random root password for a host and stores it vault-encrypted in `inventory/host_vars/<host>/root_password.vault.yml`.
+
+```
+./infratool generate_root_password myserver
+```
+
+### get_root_password `<host>`
+
+Decrypts and prints the root password for a host.
+
+```
+./infratool get_root_password myserver
+```
+
+### generate_wireguard_keys `<host>`
+
+Generates a WireGuard private key for a host and stores it vault-encrypted in `inventory/host_vars/<host>/wireguard.vault.yml`. Prints the public key to stdout.
+
+```
+./infratool generate_wireguard_keys myserver
+```
+
+### get_wireguard_public_key `<host>`
+
+Decrypts the WireGuard private key for a host and calculates and prints its public key.
+
+```
+./infratool get_wireguard_public_key myserver
+```
+
+### generate_sshd_hostkeys `<host>`
+
+Generates SSH host keys (ed25519, RSA, ECDSA) for a host and stores them vault-encrypted in `inventory/host_vars/<host>/hostkeys.vault.yml`.
+
+```
+./infratool generate_sshd_hostkeys myserver
+```
+
+### generate_sshtunnel_keys `<host>`
+
+Generates an ed25519 keypair for SSH reverse tunnels and stores the private key vault-encrypted in `inventory/host_vars/<host>/sshtunnel.vault.yml`. Prints the public key to stdout.
+
+```
+./infratool generate_sshtunnel_keys myserver
+```
+
+### generate_proxmox_token_secret `<host>`
+
+Generates a random Proxmox API token secret for a host and stores it vault-encrypted in `inventory/host_vars/<host>/proxmox_token_secret.vault.yml`.
+
+```
+./infratool generate_proxmox_token_secret myserver
+```
+
+### generate_wildcard_cert `<domain>`
+
+Generates a Let's Encrypt wildcard certificate (for `*.<domain>` and `<domain>`) via the manual DNS-01 challenge. `certbot` prints the `_acme-challenge` TXT record(s) for you to add to DNS and waits for you to confirm propagation. The resulting certificate and private key are stored vault-encrypted in `inventory/group_vars/all/wildcard_cert.<domain>.vault.yml`.
+
+Skipped if an existing certificate in that vault file was issued less than 7 days ago (checked against the certificate's own `notBefore` field, not the file mtime).
+
+Requires `certbot` to be available in the dev shell.
+
+```
+./infratool generate_wildcard_cert example.org
+```
+
+### import_vault `<source_file>` `<destination_path>`
+
+Imports a vault file from another project, decrypting it with the source project's vault password and re-encrypting it with this project's vault password. The source project root is detected automatically by walking up the directory tree from the source file.
+
+```
+./infratool import_vault ../other-project/inventory/host_vars/myserver/vault.yml inventory/host_vars/myserver/vault.yml
+```
 

@@ -46,10 +46,13 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             ansible
+            bind.dnsutils
+            certbot
             git
             nebula_1_10_3
             openssl
             python3
+            zip
           ];
 
           shellHook = ''

@@ -22,7 +22,7 @@ proxmox_dhcp_range_start: ""  # e.g. "172.25.1.100"
 proxmox_dhcp_range_end: ""  # e.g. "172.25.1.200"
 
 # Nebula routing (for direct routing between Nebula VPN and VM subnet)
-proxmox_nebula_network: "172.24.0.0/16"  # Nebula VPN network (from CA config)
+proxmox_nebula_network: "172.24.0.0/16"  # Nebula overlay CIDR (override to match your CA)
 # Note: VM subnet is proxmox_lan_cidr (e.g. "172.25.1.0/24")
 
 # Postfix SMTP relay (smart host) configuration

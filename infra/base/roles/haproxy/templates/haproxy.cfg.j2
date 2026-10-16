@@ -84,7 +84,7 @@ backend be_{{ site.name }}
 {%   set host = u | urlsplit('hostname') %}
 {%   set port = u | urlsplit('port') %}
 {%   if not port %}{%   set port = 443 if scheme == 'https' else 80 %}{%   endif %}
-    server {{ site.name }}_{{ loop.index }} {{ host }}:{{ port }} check{% if scheme == 'https' %} ssl verify none sni req.hdr(host){% endif %}
+    server {{ site.name }}_{{ loop.index }} {{ host }}:{{ port }} check{% if scheme == 'https' %} ssl verify none sni req.hdr(host) check-sni {{ site.domains[0] }}{% endif %}
 
 {% endfor %}
 {% endfor %}

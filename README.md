@@ -23,8 +23,10 @@ And add the file `collections/requirements.yml` with this content:
 collections:
   - name: git+https://github.com/machinedeguerre/infra-base-ansible.git
     type: git
-    version: main
+    version: <commit-sha>
 ```
+
+To avoid supply chain-attacks, always pin `version:` to a specific commit SHA.
 
 Install dependency:
 

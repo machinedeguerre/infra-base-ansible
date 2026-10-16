@@ -9,7 +9,7 @@
 
 - name: Compute unique cert keys referenced by sites
   ansible.builtin.set_fact:
-    _haproxy_active_certs: "{{ haproxy_sites | map(attribute='cert') | unique | list }}"
+    _haproxy_active_certs: "{{ haproxy_sites | selectattr('cert', 'defined') | map(attribute='cert') | unique | list }}"
 
 - name: Write combined PEM (fullchain + privkey) for each referenced cert
   ansible.builtin.copy:

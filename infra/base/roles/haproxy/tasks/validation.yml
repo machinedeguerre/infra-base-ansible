@@ -1,13 +1,16 @@
 ---
-- name: Each site must have name, domains, upstreams and cert
+- name: Each site must have name, domains, upstreams and either cert or plain_http
   ansible.builtin.assert:
     that:
       - item.name is defined and item.name | length > 0
       - item.domains is defined and (item.domains | length) > 0
       - item.upstreams is defined and (item.upstreams | length) > 0
-      - item.cert is defined and item.cert | length > 0
+      - (item.cert is defined and item.cert | length > 0) or (item.plain_http | default(false))
+      - not ((item.cert is defined) and (item.plain_http | default(false)))
     fail_msg: >-
-      haproxy_sites entry must define name, domains (>=1), upstreams (>=1) and cert.
+      haproxy_sites entry must define name, domains (>=1), upstreams (>=1) and
+      exactly one of: cert (TLS termination on :443) or plain_http: true
+      (served on :80 without TLS).
   loop: "{{ haproxy_sites }}"
   loop_control:
     label: "{{ item.name | default('<unnamed>') }}"
@@ -38,6 +41,6 @@
       present in wildcard_certs (or missing fullchain/privkey). Check that
       inventory/group_vars/all/wildcard_cert.{{ item.cert }}.vault.yml exists
       and decrypts correctly.
-  loop: "{{ haproxy_sites }}"
+  loop: "{{ haproxy_sites | selectattr('cert', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }} -> {{ item.cert }}"

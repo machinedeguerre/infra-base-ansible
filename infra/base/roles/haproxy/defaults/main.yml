@@ -5,6 +5,13 @@
 #   - upstreams: one or more URLs of backend servers (http or https)
 #   - cert:      key into wildcard_certs dict (the wildcard domain name,
 #                e.g. "example.com" for *.example.com)
+#   - plain_http: true — serve the site on port 80 without TLS, instead of
+#                cert. For hosts behind another TLS-terminating proxy. Plain
+#                sites are exempt from the HTTP->HTTPS redirect, and no :443
+#                frontend is rendered when no site has a cert.
+#
+# https upstreams are contacted with SNI/Host taken from the incoming Host
+# header and without certificate verification (trusted network assumed).
 #
 # Example:
 # haproxy_sites:
@@ -14,6 +21,12 @@
 #     upstreams:
 #       - http://192.0.2.10/
 #     cert: example.com
+#   - name: app2
+#     domains:
+#       - app2.example.com
+#     upstreams:
+#       - https://192.0.2.11/
+#     plain_http: true
 haproxy_sites: []
 
 # Wildcard certificates (typically merged in from group_vars/all/wildcard_cert.*.vault.yml

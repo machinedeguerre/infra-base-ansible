@@ -26,13 +26,33 @@ defaults
     timeout server  60s
     timeout http-request 10s
 
+{% set plain_sites = haproxy_sites | selectattr('plain_http', 'defined') | selectattr('plain_http') | list %}
+{% set tls_sites = (haproxy_sites | rejectattr('plain_http', 'defined') | list) + (haproxy_sites | selectattr('plain_http', 'defined') | rejectattr('plain_http') | list) %}
 # ---------------------------------------------------------------------------
-# Port 80 — redirect everything to HTTPS
+# Port 80 — plain-HTTP sites are served here; everything else is redirected
+# to HTTPS (when any TLS site exists)
 # ---------------------------------------------------------------------------
 frontend http_in
     bind *:80
     mode http
-    http-request redirect scheme https code 301
+{% if plain_sites %}
+    http-request set-header X-Real-IP %[src]
+{% endif %}
+{% for site in plain_sites %}
+
+    # Site: {{ site.name }} (plain HTTP)
+{% for d in site.domains %}
+    acl host_{{ site.name }} hdr(host) -i {{ d }}
+{% endfor %}
+{% endfor %}
+{% if tls_sites %}
+    http-request redirect scheme https code 301{% if plain_sites %} unless {{ plain_sites | map(attribute='name') | map('regex_replace', '^', 'host_') | join(' or ') }}{% endif %}
+
+{% endif %}
+{% for site in plain_sites %}
+    use_backend be_{{ site.name }} if host_{{ site.name }}
+{% endfor %}
+{% if tls_sites %}
 
 # ---------------------------------------------------------------------------
 # Port 443 — TLS termination with SNI cert selection
@@ -41,7 +61,7 @@ frontend https_in
     bind *:443 ssl crt {{ haproxy_certs_dir }}/ alpn h2,http/1.1
     mode http
     http-request set-header X-Forwarded-Proto https
-{% for site in haproxy_sites %}
+{% for site in tls_sites %}
 
     # Site: {{ site.name }}
 {% for d in site.domains %}
@@ -50,6 +70,7 @@ frontend https_in
     use_backend be_{{ site.name }} if host_{{ site.name }}
 {% endfor %}
     # No default_backend — unknown Host headers get HAProxy's default 503.
+{% endif %}
 
 # ---------------------------------------------------------------------------
 # Backends
@@ -63,7 +84,7 @@ backend be_{{ site.name }}
 {%   set host = u | urlsplit('hostname') %}
 {%   set port = u | urlsplit('port') %}
 {%   if not port %}{%   set port = 443 if scheme == 'https' else 80 %}{%   endif %}
-    server {{ site.name }}_{{ loop.index }} {{ host }}:{{ port }} check{% if scheme == 'https' %} ssl verify none{% endif %}
+    server {{ site.name }}_{{ loop.index }} {{ host }}:{{ port }} check{% if scheme == 'https' %} ssl verify none sni req.hdr(host){% endif %}
 
 {% endfor %}
 {% endfor %}

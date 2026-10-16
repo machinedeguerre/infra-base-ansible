@@ -1,0 +1,165 @@
+---
+# drift_report — read-only checks comparing actual host state against what
+# the collection's roles are configured to produce. Reports (never changes):
+#   - users with UID 1000-64999 not created/managed by our roles
+#   - manually installed apt packages not accounted for by our roles
+#   - non-loopback listening ports not explained by our roles
+#
+# Tune per group/host with the *_extra vars below; when something flagged is
+# legitimate, either bring it under Ansible management or add it there.
+
+# Users that are fine even though no role creates them.
+drift_report_user_ignore_extra: []
+
+# Packages that are fine even though no role installs them.
+drift_report_package_ignore_extra: []
+
+# Listening ports (strings) that are fine even though no role opens them.
+drift_report_expected_ports_extra: []
+
+# Fail the play when drift is found (for CI); default is report-only.
+drift_report_fail_on_drift: false
+
+# Processes whose listening sockets are never flagged (OS plumbing).
+drift_report_allowed_processes:
+  - systemd-resolve
+  - systemd-network
+  - dhclient
+
+# Package-name patterns never flagged (regex, matched with 'search').
+drift_report_package_ignore_patterns:
+  - '^lib'
+  - '^linux-image'
+  - '^grub-'
+  - '^python3-'
+  - '^task-'
+  - '^fonts-'
+  - '^openssh-'
+
+# Expected state contributed by the infra.base.proxmox role; applied only
+# when the host has proxmox_lan_addr set (same gate as the playbook uses).
+# The package list mirrors proxmox tasks/packages.yml (hardcoded there).
+drift_report_proxmox_packages:
+  - proxmox-ve
+  - postfix
+  - open-iscsi
+  - ifupdown2
+  - nftables
+  - dnsmasq
+drift_report_proxmox_users:
+  - ceph  # created by proxmox-ve's ceph packaging
+drift_report_proxmox_ports:
+  - "8006"  # pveproxy (web UI)
+  - "3128"  # spiceproxy (consoles)
+drift_report_proxmox_processes:
+  - dnsmasq  # DHCP/DNS on the VM bridge, configured by the role
+
+# Debian base-system packages typically marked "manual" by the installer.
+# Covers Debian 12 (bookworm) and 13 (trixie) bases.
+# Deliberately NOT ignored (should be flagged if present, since we remove
+# them during cleanup): git, tig, netcat-traditional, inetutils-telnet.
+drift_report_package_ignore:
+  # trixie additions
+  - dhcpcd-base
+  - gcc-14-base
+  - linux-sysctl-defaults
+  - login.defs
+  - openssl-provider-legacy
+  - sed
+  - sqv
+  - wtmpdb
+  # common bookworm/trixie base
+  - adduser
+  - apt
+  - apt-listchanges
+  - apt-utils
+  - base-files
+  - base-passwd
+  - bash
+  - bind9-dnsutils
+  - bind9-host
+  - bsdutils
+  - busybox
+  - console-setup
+  - coreutils
+  - cpio
+  - cron
+  - cron-daemon-common
+  - dash
+  - dbus
+  - debconf
+  - debconf-i18n
+  - debian-archive-keyring
+  - debian-faq
+  - debianutils
+  - diffutils
+  - discover
+  - dmidecode
+  - dmsetup
+  - doc-debian
+  - dpkg
+  - e2fsprogs
+  - fdisk
+  - findutils
+  - gcc-12-base
+  - gettext-base
+  - gpgv
+  - grep
+  - groff-base
+  - hostname
+  - ifupdown
+  - init
+  - init-system-helpers
+  - initramfs-tools
+  - installation-report
+  - intel-microcode
+  - isc-dhcp-client
+  - isc-dhcp-common
+  - keyboard-configuration
+  - kmod
+  - krb5-locales
+  - laptop-detect
+  - locales
+  - login
+  - logrotate
+  - logsave
+  - man-db
+  - manpages
+  - mawk
+  - media-types
+  - mime-support
+  - mount
+  - nano
+  - ncurses-base
+  - ncurses-bin
+  - ncurses-term
+  - netbase
+  - os-prober
+  - passwd
+  - pciutils
+  - perl
+  - perl-base
+  - readline-common
+  - reportbug
+  - sensible-utils
+  - sudo
+  - systemd
+  - systemd-resolved
+  - systemd-sysv
+  - systemd-timesyncd
+  - sysvinit-utils
+  - tasksel
+  - tasksel-data
+  - tzdata
+  - ucf
+  - udev
+  - usbutils
+  - usr-is-merged
+  - util-linux
+  - util-linux-extra
+  - vim-common
+  - vim-tiny
+  - wamerican
+  - whiptail
+  - zlib1g
+  - zstd

@@ -1,0 +1,126 @@
+---
+# All tasks are read-only: collectors run with changed_when: false and
+# nothing on the host is modified.
+
+# Role defaults are scoped to their own role, so load the sibling roles'
+# defaults under namespaced dicts. Inventory overrides still win via
+# `| default(...)` when the expectations are built below.
+- name: Load sibling role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path | dirname }}/{{ item.role }}/defaults/main.yml"
+    name: "{{ item.name }}"
+  loop:
+    - { role: common_packages, name: _drift_cp_def }
+    - { role: docker, name: _drift_docker_def }
+    - { role: user_mgmt, name: _drift_um_def }
+    - { role: bootstrap_ansible_user, name: _drift_boot_def }
+  loop_control:
+    label: "{{ item.role }}"
+
+- name: Collect human users (UID 1000-64999)
+  ansible.builtin.command: awk -F':' '$3 >= 1000 && $3 < 65000 {print $1}' /etc/passwd
+  register: _drift_users_raw
+  changed_when: false
+
+- name: Collect manually installed packages
+  ansible.builtin.command: apt-mark showmanual
+  register: _drift_packages_raw
+  changed_when: false
+
+- name: Collect listening sockets with owning process
+  ansible.builtin.shell: |
+    ss -tulnpH | while read -r proto state rq sq local peer rest; do
+      proc=$(printf '%s' "$rest" | sed -nE 's/.*users:\(\("([^"]+)".*/\1/p')
+      printf '%s %s %s\n' "$proto" "$local" "${proc:-unknown}"
+    done
+  become: true
+  register: _drift_ss_raw
+  changed_when: false
+
+- name: Determine active optional roles
+  ansible.builtin.set_fact:
+    _drift_proxmox_active: "{{ proxmox_lan_addr is defined and proxmox_lan_addr | length > 0 }}"
+
+- name: Build expected state from role configuration
+  ansible.builtin.set_fact:
+    _drift_expected_users: >-
+      {{ ([user_mgmt_default_username | default(_drift_um_def.user_mgmt_default_username)]
+          + [bootstrap_ansible_user_name | default(_drift_boot_def.bootstrap_ansible_user_name)]
+          + (user_mgmt_users | default(_drift_um_def.user_mgmt_users) | map(attribute='username') | list)
+          + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_users, []))
+          + drift_report_user_ignore_extra)
+         | unique | list }}
+    _drift_expected_packages: >-
+      {{ ((common_packages_override | default(_drift_cp_def.common_packages_override) | length > 0)
+          | ternary(common_packages_override | default([]),
+              common_packages_networking | default(_drift_cp_def.common_packages_networking)
+              + common_packages_cli | default(_drift_cp_def.common_packages_cli)
+              + common_packages_archives | default(_drift_cp_def.common_packages_archives)
+              + common_packages_troubleshooting | default(_drift_cp_def.common_packages_troubleshooting)
+              + common_packages_quality_of_life | default(_drift_cp_def.common_packages_quality_of_life)
+              + common_packages_extra | default(_drift_cp_def.common_packages_extra)))
+         + (docker_packages | default(_drift_docker_def.docker_packages))
+         + ((haproxy_sites | default([]) | length > 0) | ternary(['haproxy'], []))
+         + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_packages, []))
+         + drift_report_package_ignore
+         + drift_report_package_ignore_extra }}
+    _drift_expected_ports: >-
+      {{ (['22']
+          + ((nebula_ip is defined and nebula_ip | length > 0)
+             | ternary([nebula_listen_port | default(4242) | string], []))
+          + ((haproxy_sites | default([]) | length > 0) | ternary(['80'], []))
+          + ((haproxy_sites | default([]) | selectattr('cert', 'defined') | list | length > 0)
+             | ternary(['443'], []))
+          + (haproxy_tcp_forwards | default([]) | map(attribute='listen_port') | map('string') | list)
+          + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_ports | map('string') | list, []))
+          + (drift_report_expected_ports_extra | map('string') | list))
+         | unique | list }}
+
+- name: Evaluate drift
+  ansible.builtin.set_fact:
+    _drift_unexpected_users: >-
+      {{ _drift_users_raw.stdout_lines | reject('in', _drift_expected_users) | sort }}
+    _drift_unexpected_packages: >-
+      {{ _drift_packages_raw.stdout_lines
+         | difference(_drift_expected_packages)
+         | reject('search', drift_report_package_ignore_patterns | join('|'))
+         | sort }}
+    _drift_unexpected_ports: >-
+      {{ _drift_ss_raw.stdout_lines
+         | reject('search', ' 127\.| \[::1\]')
+         | reject('search', ' (' + ((drift_report_allowed_processes
+             + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_processes, []))) | join('|')) + ')$')
+         | reject('search', ':(' + (_drift_expected_ports | join('|')) + ') ')
+         | sort }}
+
+- name: "Drift: users not managed by Ansible"
+  ansible.builtin.debug:
+    var: _drift_unexpected_users
+  when: _drift_unexpected_users | length > 0
+
+- name: "Drift: manually installed packages not managed by Ansible"
+  ansible.builtin.debug:
+    var: _drift_unexpected_packages
+  when: _drift_unexpected_packages | length > 0
+
+- name: "Drift: listening ports not explained by Ansible (proto address process)"
+  ansible.builtin.debug:
+    var: _drift_unexpected_ports
+  when: _drift_unexpected_ports | length > 0
+
+- name: No drift detected
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: users, packages and listening ports all match the Ansible configuration."
+  when:
+    - _drift_unexpected_users | length == 0
+    - _drift_unexpected_packages | length == 0
+    - _drift_unexpected_ports | length == 0
+
+- name: Fail on drift (drift_report_fail_on_drift=true)
+  ansible.builtin.assert:
+    that:
+      - _drift_unexpected_users | length == 0
+      - _drift_unexpected_packages | length == 0
+      - _drift_unexpected_ports | length == 0
+    fail_msg: "Drift detected on {{ inventory_hostname }} — see the lists above."
+  when: drift_report_fail_on_drift

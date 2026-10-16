@@ -6,6 +6,20 @@ nebula_binary_path: /usr/local/bin/nebula
 nebula_ip: "" # REQUIRED per host, IP only e.g. "172.24.1.1"
 nebula_groups: [] # REQUIRED - must be set per host (list of group names, e.g. ['web', 'production'])
 
+# Groups every managed node gets in addition to nebula_groups (deduplicated).
+# "infra" grants node-to-node SSH in the firewall template (overlay-split
+# hops). Override per host (e.g. []) to exclude a node. External devices
+# (generate_nebula_bundle) do NOT inherit this - their groups stay explicit.
+# Group semantics used by the firewall template:
+#   sysop - admin devices; full access to hosts and routed subnets
+#   infra - every ansible-managed node; grants node-to-node SSH
+nebula_implicit_groups: ["infra"]
+
+# Revoked certificate fingerprints (from `nebula-cert print`). Nebula has no
+# CRL — adding a fingerprint here and running the playbook against all hosts
+# is how a lost/compromised cert is revoked before it expires.
+nebula_blocklist: []
+
 nebula_lighthouse_ip: []
 
 nebula_listen_port: 4242 # Defaults to non-standard port for Nebula

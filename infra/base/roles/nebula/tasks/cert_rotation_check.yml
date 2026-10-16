@@ -62,7 +62,7 @@
   ansible.builtin.set_fact:
     nebula_groups_changed: >-
       {{
-        nebula_cert_groups | default([]) | sort != nebula_groups | sort
+        nebula_cert_groups | default([]) | sort != _nebula_effective_groups | sort
       }}
 
 - name: Check if unsafe networks have changed (remote)

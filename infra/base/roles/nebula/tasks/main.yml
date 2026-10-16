@@ -2,6 +2,13 @@
 - name: Validate required variables
   ansible.builtin.include_tasks: validation.yml
 
+# Single source of truth for the groups that go into the cert, the rotation
+# comparison and the firewall template. Sorted so list order can never be
+# mistaken for a group change by the rotation check.
+- name: Compute effective nebula groups
+  ansible.builtin.set_fact:
+    _nebula_effective_groups: "{{ (nebula_groups + nebula_implicit_groups) | unique | sort }}"
+
 - name: Install nebula package
   ansible.builtin.include_tasks: install.yml
 

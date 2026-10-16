@@ -2,6 +2,14 @@ pki:
   ca: {{ nebula_pki_dir }}/ca.crt
   cert: {{ nebula_pki_dir }}/host.crt
   key: {{ nebula_pki_dir }}/host.key
+{% if nebula_blocklist | default([]) | length > 0 %}
+  # Revoked certificate fingerprints (nebula has no CRL; this is the
+  # revocation mechanism — distributed to every node by the playbook).
+  blocklist:
+{% for fp in nebula_blocklist %}
+    - "{{ fp }}"
+{% endfor %}
+{% endif %}
 
 tun:
   device: tun0
@@ -16,7 +24,7 @@ tun:
 {% endfor %}
 {% endif %}
 
-{% set is_lighthouse = 'lighthouse' in nebula_groups %}
+{% set is_lighthouse = 'lighthouse' in _nebula_effective_groups %}
 static_host_map:
 {% for k, v in nebula_static_host_map.items() if not (is_lighthouse and k == nebula_ip) %}
   "{{ k }}":
@@ -52,30 +60,36 @@ relay:
 
 firewall:
   inbound:
-    # Allow ICMP from any host (to host and VMs)
+    # Allow ICMP to this host's own address from admin devices (sysop) and
+    # managed nodes (infra). Stateful: replies to allowed pings always flow.
+    # (No local_cidr: traffic THROUGH this host to routed subnets is
+    # governed solely by the sysop rules below.)
     - port: any
       proto: icmp
-      host: any
-{% if nebula_unsafe_networks | default([]) | length > 0 %}
-      local_cidr: any
-{% endif %}
+      group: sysop
+    - port: any
+      proto: icmp
+      group: infra
 
-    # Allow SSH inbound from any host
+    # Allow SSH to this host's own address from admin devices (sysop) and
+    # from managed nodes (infra) — the latter enables node-to-node SSH
+    # hops when the overlay is partially split. Deliberately NOT host: any:
+    # external bundles without these groups get no SSH surface.
     - port: 22
       proto: tcp
-      host: any
-{% if nebula_unsafe_networks | default([]) | length > 0 %}
-      local_cidr: any
-{% endif %}
+      group: sysop
+    - port: 22
+      proto: tcp
+      group: infra
 
-{% if 'proxmox' in nebula_groups %}
+{% if 'proxmox' in _nebula_effective_groups %}
     # Allow Proxmox web interface (port 8006) from sysop group
     - port: 8006
       proto: tcp
       group: sysop
 {% endif %}
 
-{% if 'webhost' in nebula_groups %}
+{% if 'webhost' in _nebula_effective_groups %}
     # Allow HTTP/HTTPS inbound to webhost from any nebula peer
     # (intentionally no local_cidr -- traffic to VM subnets must go via haproxy,
     # not be exposed directly over the overlay)

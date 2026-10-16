@@ -304,8 +304,12 @@ config = {
     "tun": {"device": "tun0"},
     "firewall": {
         "inbound": [
-            {"port": "any", "proto": "icmp", "host": "any"},
-            {"port": 22,    "proto": "tcp",  "host": "any"},
+            # ICMP and SSH only from admin devices and managed nodes —
+            # never host: any.
+            {"port": "any", "proto": "icmp", "group": "sysop"},
+            {"port": "any", "proto": "icmp", "group": "infra"},
+            {"port": 22,    "proto": "tcp",  "group": "sysop"},
+            {"port": 22,    "proto": "tcp",  "group": "infra"},
         ],
         "outbound": [
             {"port": "any", "proto": "any", "host": "any"},
@@ -319,8 +323,9 @@ if filtered_routes:
     ]
 
 if unsafe_networks:
-    for rule in config["firewall"]["inbound"]:
-        rule["local_cidr"] = "any"
+    # Inbound rules stay scoped to the device's own address; access THROUGH
+    # the device to its advertised subnets is granted only via the explicit
+    # sysop rules below.
     for rule in config["firewall"]["outbound"]:
         rule["local_cidr"] = "any"
     for subnet in unsafe_networks:

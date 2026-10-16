@@ -9,6 +9,8 @@ proxmox_template_vm_disk_size: "32G"
 proxmox_template_vm_disk_storage: "local" # Proxmox storage pool (e.g. "local", "local-lvm", "zfspool")
 
 # ISO configuration
+# Must name an ISO that the proxmox role's proxmox_iso_files downloads —
+# keep in sync with that default when bumping the Debian point release.
 proxmox_template_iso_filename: "debian-13.4.0-amd64-netinst.iso"
 proxmox_template_iso_path: "/var/lib/vz/template/iso"
 

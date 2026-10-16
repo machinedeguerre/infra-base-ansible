@@ -35,13 +35,15 @@
     state: restarted
   when: pveproxy_options.changed
 
+# No backrefs here (or below): with backrefs lineinfile is a silent no-op
+# when the line is absent — and a fresh/noninteractive main.cf lacks these
+# lines. Without backrefs the line is replaced if present, appended if not.
 - name: Configure postfix to listen only on loopback
   ansible.builtin.lineinfile:
     path: /etc/postfix/main.cf
     regexp: '^inet_interfaces\s*='
     line: 'inet_interfaces = loopback-only'
     create: no
-    backrefs: yes
   notify: Restart postfix
 
 - name: Configure postfix relayhost (smart host)
@@ -50,17 +52,15 @@
     regexp: '^relayhost\s*='
     line: 'relayhost = [{{ proxmox_postfix_relayhost }}]:{{ proxmox_postfix_relayhost_port }}'
     create: no
-    backrefs: yes
   when: proxmox_postfix_relayhost | length > 0
   notify: Restart postfix
 
 - name: Configure postfix SASL authentication for relayhost
   ansible.builtin.lineinfile:
     path: /etc/postfix/main.cf
-    regexp: '^{{ item.regexp }}'
+    regexp: '{{ item.regexp }}'
     line: '{{ item.line }}'
     create: no
-    backrefs: yes
   when:
     - proxmox_postfix_relayhost | length > 0
     - proxmox_postfix_relayhost_username | length > 0

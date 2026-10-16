@@ -108,6 +108,27 @@
     var: _drift_unexpected_ports
   when: _drift_unexpected_ports | length > 0
 
+# Reboot hint: a newly installed kernel (e.g. a point upgrade, or the PVE
+# kernel after proxmox-ve install) only takes effect at boot. Informational
+# only — not counted as drift.
+- name: Collect running and newest installed kernel
+  ansible.builtin.shell: |
+    printf '%s\n' "$(uname -r)"
+    ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -1
+  register: _drift_kernel_raw
+  changed_when: false
+  failed_when: false
+
+- name: "Reboot recommended: running kernel is not the newest installed"
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: running kernel {{ _drift_kernel_raw.stdout_lines[0] }},
+      newest installed is {{ _drift_kernel_raw.stdout_lines[1] }} — reboot to activate it.
+  when:
+    - _drift_kernel_raw.stdout_lines | default([]) | length >= 2
+    - _drift_kernel_raw.stdout_lines[1] | length > 0
+    - _drift_kernel_raw.stdout_lines[0] != _drift_kernel_raw.stdout_lines[1]
+
 - name: No drift detected
   ansible.builtin.debug:
     msg: "{{ inventory_hostname }}: users, packages and listening ports all match the Ansible configuration."

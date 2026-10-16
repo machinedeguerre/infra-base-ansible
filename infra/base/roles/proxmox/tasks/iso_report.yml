@@ -1,0 +1,41 @@
+---
+# Report-only: tells you when Debian has published a newer point release than
+# the pinned netinst ISO in proxmox_iso_files. Never changes anything —
+# bumping the pin is a deliberate commit, not an automatic action.
+# Not part of the role's main flow; invoke from a report playbook via:
+#   include_role: { name: infra.base.proxmox, tasks_from: iso_report }
+
+- name: Extract pinned Debian netinst version from proxmox_iso_files
+  ansible.builtin.set_fact:
+    _proxmox_pinned_debian: >-
+      {{ proxmox_iso_files | map(attribute='filename')
+         | map('regex_search', '^debian-([0-9][0-9.]*)-amd64-netinst\.iso$', '\1')
+         | select | map('first') | list | first | default('') }}
+
+- name: Fetch current Debian netinst release info
+  ansible.builtin.uri:
+    url: https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/SHA256SUMS
+    return_content: true
+  register: _proxmox_current_sums
+  changed_when: false
+  failed_when: false
+  when: _proxmox_pinned_debian | length > 0
+
+- name: Extract current Debian netinst version
+  ansible.builtin.set_fact:
+    _proxmox_current_debian: >-
+      {{ (_proxmox_current_sums.content | default(''))
+         | regex_search('debian-([0-9][0-9.]*)-amd64-netinst\.iso', '\1')
+         | default([''], true) | first }}
+  when: _proxmox_pinned_debian | length > 0
+
+- name: Newer Debian point release than the pinned ISO
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: proxmox_iso_files pins debian-{{ _proxmox_pinned_debian }},
+      but {{ _proxmox_current_debian }} is current. Bump the pin (URL + checksum) once
+      {{ _proxmox_current_debian }} appears under cdimage.debian.org/cdimage/archive/.
+  when:
+    - _proxmox_pinned_debian | length > 0
+    - _proxmox_current_debian | default('') | length > 0
+    - _proxmox_current_debian is version(_proxmox_pinned_debian, '>')

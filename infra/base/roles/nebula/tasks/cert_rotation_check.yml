@@ -32,6 +32,7 @@
   ansible.builtin.set_fact:
     nebula_cert_details: "{{ nebula_cert_json_obj.details | default({}) }}"
     nebula_not_after_str: "{{ nebula_cert_json_obj.details.notAfter | default('') }}"
+    nebula_current_cert_fingerprint: "{{ nebula_cert_json_obj.fingerprint | default('') }}"
   when: nebula_hostcrt_stat.stat.exists
 
 - name: Extract IPs, groups and unsafe networks from cert (remote)
@@ -47,6 +48,7 @@
     nebula_cert_groups: []
     nebula_cert_unsafe_networks: []
     nebula_not_after_str: ""
+    nebula_current_cert_fingerprint: ""
   when: not nebula_hostcrt_stat.stat.exists
 
 - name: Check if IP has changed (remote)

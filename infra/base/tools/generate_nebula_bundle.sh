@@ -35,10 +35,13 @@ Required:
 Optional:
   --unsafe-networks CIDRs   Comma-separated subnets this host is authorized
                             to route through Nebula (embedded in cert).
-  --duration DUR            Cert validity as a Go duration (e.g. 87600h for
-                            ~10 years). Default: nebula_cert_duration from
-                            role defaults / group_vars. External hosts get no
-                            automatic rotation, so longer durations are OK here.
+  --duration DUR            Cert validity as a Go duration. Default: 8760h
+                            (1 year). External hosts get no automatic rotation
+                            and nebula has no CRL — keep durations short and
+                            renew by regenerating the bundle. Every signing is
+                            recorded in logs/nebula-cert-log.csv; revoke a
+                            lost cert via nebula_blocklist (fingerprint from
+                            the log).
   --activate-lighthouse     Make this host a lighthouse AND relay. Also
                             adds "lighthouse" to the cert's groups if not
                             already present.
@@ -177,14 +180,17 @@ print("NEBULA_LISTEN_PORT="   + shlex.quote(str(d.get("nebula_listen_port", 4242
 PY
 )"
 
+# Bundles default to 1 year
 if [ -n "$DURATION" ]; then
   NEBULA_CERT_DURATION="$DURATION"
+else
+  NEBULA_CERT_DURATION="8760h"
 fi
 
 # --- Extract CA material from the vault -------------------------------------
 
 echo "Decrypting CA material from vault..."
-ansible-vault view "$VAULT_FILE" --vault-id project > "$WORK_DIR/ca_vault.yml"
+ansible-vault view "$VAULT_FILE" > "$WORK_DIR/ca_vault.yml"
 
 python3 - "$WORK_DIR/ca_vault.yml" "$PKI_DIR/ca.crt" "$WORK_DIR/ca.key" <<'PY'
 import sys, yaml
@@ -217,6 +223,66 @@ if [ -n "$UNSAFE_NETWORKS" ]; then
   SIGN_ARGS+=(-unsafe-networks "$UNSAFE_NETWORKS")
 fi
 nebula-cert "${SIGN_ARGS[@]}"
+
+# --- CA journal: log the signing to logs/nebula-cert-log.csv -----------
+# Same journal the nebula role appends host rotations to. The CA keeps no
+# database of issued certs; this log is the only complete record of what can
+# be blocklisted (fingerprints for nebula_blocklist) and who holds what.
+
+CERT_LOG="$PROJECT_ROOT/logs/nebula-cert-log.csv"
+mkdir -p "$PROJECT_ROOT/logs"
+if [ ! -f "$CERT_LOG" ]; then
+  echo "issued_at,type,name,ip,groups,unsafe_networks,not_after,fingerprint,issuer,replaces,issued_by" > "$CERT_LOG"
+  chmod 0644 "$CERT_LOG"
+fi
+# NOTE: the cert JSON goes via a file — piping it to `python3 -` would clash
+# with the heredoc, which already occupies stdin as the script source.
+nebula-cert print -json -path "$PKI_DIR/host.crt" > "$WORK_DIR/host_cert.json"
+python3 - "$CERT_LOG" "$NAME" "$IP" "$CERT_GROUPS" "$UNSAFE_NETWORKS" \
+  "$WORK_DIR/host_cert.json" <<'PY'
+import json
+import os
+import socket
+import sys
+from datetime import datetime, timezone
+
+log_path, name, ip, groups, subnets, cert_json_path = sys.argv[1:7]
+
+
+def utc(ts):
+    """Normalize an RFC3339 timestamp (nebula-cert prints local time) to UTC."""
+    if not ts:
+        return ""
+    try:
+        return (datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                .astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return str(ts)
+
+
+with open(cert_json_path) as f:
+    cert = json.load(f)
+if isinstance(cert, list):
+    cert = cert[0]
+details = cert.get("details", {})
+
+row = ",".join([
+    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "bundle",
+    name,
+    ip,
+    ";".join(groups.split(",")),
+    ";".join(filter(None, subnets.split(","))),
+    utc(details.get("notAfter", "")),
+    str(cert.get("fingerprint", "")),
+    str(details.get("issuer", "")),
+    "",  # replaces: bundles have no tracked predecessor
+    f"{os.environ.get('USER', 'unknown')}@{socket.gethostname()}",
+])
+with open(log_path, "a") as f:
+    f.write(row + "\n")
+PY
+echo "Logged signing to ${CERT_LOG}"
 
 # --- Render nebula.yml ------------------------------------------------------
 

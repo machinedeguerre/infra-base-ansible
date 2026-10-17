@@ -52,3 +52,65 @@
   delegate_to: localhost
   become: false
   when: nebula_rotate_needed | bool
+
+# --- CA journal: log every signing to logs/nebula-cert-log.csv --------------
+
+- name: Ensure logs directory exists (controller)
+  ansible.builtin.file:
+    path: "{{ playbook_dir | dirname }}/logs"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool
+
+- name: Read new cert info (controller)
+  ansible.builtin.command: "nebula-cert print -json -path {{ nebula_local_tmp.path }}/host.crt"
+  register: _nebula_new_cert_print
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: nebula_rotate_needed | bool
+
+- name: Parse new cert info (controller)
+  ansible.builtin.set_fact:
+    _nebula_new_cert: >-
+      {{
+        (_nebula_new_cert_print.stdout | from_json) | first
+        if (_nebula_new_cert_print.stdout | from_json) is sequence
+        else (_nebula_new_cert_print.stdout | from_json)
+      }}
+  when: nebula_rotate_needed | bool
+
+- name: Ensure cert log exists with header (controller)
+  ansible.builtin.copy:
+    content: "issued_at,type,name,ip,groups,unsafe_networks,not_after,fingerprint,issuer,replaces,issued_by\n"
+    dest: "{{ playbook_dir | dirname }}/logs/nebula-cert-log.csv"
+    force: false
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when: nebula_rotate_needed | bool
+
+- name: Append signing to cert log (controller)
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir | dirname }}/logs/nebula-cert-log.csv"
+    line: >-
+      {{ now(utc=True).strftime('%Y-%m-%dT%H:%M:%SZ') }},host,{{
+      nebula_name | default(inventory_hostname) }},{{
+      nebula_ip }},{{
+      _nebula_effective_groups | join(';') }},{{
+      nebula_unsafe_networks | default([]) | join(';') }},{{
+      '%Y-%m-%dT%H:%M:%SZ' | strftime(
+        (_nebula_new_cert.details.notAfter
+         | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp(), utc=True)
+      if _nebula_new_cert.details.notAfter | default('') | length > 0 else '' }},{{
+      _nebula_new_cert.fingerprint | default('') }},{{
+      _nebula_new_cert.details.issuer | default('') }},{{
+      nebula_current_cert_fingerprint | default('') }},{{
+      lookup('env', 'USER') }}@{{ lookup('pipe', 'hostname') }}
+    insertafter: EOF
+  delegate_to: localhost
+  become: false
+  throttle: 1  # several hosts may rotate in the same run — serialize appends
+  when: nebula_rotate_needed | bool

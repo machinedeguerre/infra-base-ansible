@@ -5,8 +5,8 @@ set -euo pipefail
 # against a known_hosts file derived from the vaulted host keys.
 #
 # Regenerates <project>/.known_hosts from inventory/host_vars/*/hostkeys.vault.yml
-# when stale (any file under inventory/ newer than it, or line count mismatch),
-# then execs ansible-playbook with the given arguments.
+# when stale (something under inventory/ newer than it, or line count mismatch),
+# then runs ansible-playbook with the given arguments.
 #
 # Usage:
 #   ./infratool play [--tofu] <ansible-playbook arguments...>
@@ -19,7 +19,7 @@ set -euo pipefail
 KNOWN_HOSTS="${PROJECT_ROOT}/.known_hosts"
 
 usage() {
-  sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 1
 }
 
@@ -41,8 +41,49 @@ require ansible-inventory
 require ansible-vault
 require python3
 
-# The cache is only a convenience: a stale file can never open anything up —
-# SSH fails closed on a missing or mismatching key, and the fix is a regen.
+WORK_DIR="$(mktemp -d -t infratool-play-XXXXXX)"
+cleanup() { rm -rf "$WORK_DIR"; }
+trap cleanup EXIT
+
+VAULT_PW_FILE=""
+VAULT_LABEL=""
+derive_vault_secret() {
+  local spec script label
+  spec="$(sed -n 's/^[[:space:]]*vault_identity_list[[:space:]]*=[[:space:]]*//p' \
+          "${PROJECT_ROOT}/ansible.cfg" 2>/dev/null | head -1)"
+  [ -n "$spec" ] || return 1
+  spec="${spec%%,*}"                 # first identity if a list
+  label="${spec%%@*}"                # "project"
+  script="${spec#*@}"                # path to the gpg client
+  [ -n "$script" ] && [ "$script" != "$spec" ] || return 1
+  case "$script" in /*) ;; *) script="${PROJECT_ROOT}/${script}" ;; esac
+  [ -f "$script" ] || return 1
+
+  local pw
+  pw="$(cd "$PROJECT_ROOT" && bash "$script")" || return 1   # one GPG op
+  [ -n "$pw" ] || return 1
+
+  _INFRATOOL_VAULT_PW="$pw"
+  export _INFRATOOL_VAULT_PW
+  VAULT_PW_FILE="${WORK_DIR}/vault-pw.sh"
+  printf '#!/usr/bin/env bash\nprintf %%s "$_INFRATOOL_VAULT_PW"\n' > "$VAULT_PW_FILE"
+  chmod 700 "$VAULT_PW_FILE"
+  VAULT_LABEL="$label"
+}
+
+if derive_vault_secret; then
+  echo "Vault password derived once; reusing for this run." >&2
+  # Route EVERY vault consumer in this run (ansible-inventory, ansible-vault,
+  # ansible-playbook) through the cached password. Env beats ansible.cfg, so
+  # the GPG client is not consulted again.
+  export ANSIBLE_VAULT_PASSWORD_FILE="$VAULT_PW_FILE"
+  export ANSIBLE_VAULT_IDENTITY_LIST="${VAULT_LABEL}@${VAULT_PW_FILE}"
+else
+  echo "NOTE: could not pre-derive vault password; falling back to per-file GPG." >&2
+fi
+
+# --- known_hosts freshness --------------------------------------------------
+
 known_hosts_is_fresh() {
   [ -s "$KNOWN_HOSTS" ] || return 1
   local expected actual
@@ -50,18 +91,16 @@ known_hosts_is_fresh() {
   [ -n "$expected" ] || return 1
   actual="$(grep -c '^[^#]' "$KNOWN_HOSTS" || true)"
   [ "$actual" = "$expected" ] || return 1
-  [ -z "$(find "${PROJECT_ROOT}/inventory" -newer "$KNOWN_HOSTS" -print -quit)" ] || return 1
+  [ -z "$(find "${PROJECT_ROOT}/inventory" -newer "$KNOWN_HOSTS" \
+          -print -quit)" ] || return 1
 }
 
 generate_known_hosts() {
   echo "Regenerating ${KNOWN_HOSTS} from vaulted host keys..." >&2
-  umask 077
   local tmp
-  tmp="$(mktemp "${KNOWN_HOSTS}.XXXXXX")"
-  # shellcheck disable=SC2064
-  trap "rm -f '${tmp}'" EXIT
+  tmp="${WORK_DIR}/known_hosts.new"
 
-  python3 - "$PROJECT_ROOT" > "$tmp" <<'PYEOF'
+  ( umask 077; python3 - "$PROJECT_ROOT" "$VAULT_PW_FILE" > "$tmp" ) <<'PYEOF'
 import json
 import os
 import subprocess
@@ -70,6 +109,11 @@ import sys
 import yaml
 
 root = sys.argv[1]
+vault_pw_file = sys.argv[2] if len(sys.argv) > 2 else ""
+
+vault_base = ["ansible-vault", "view"]
+if vault_pw_file:
+    vault_base += ["--vault-password-file", vault_pw_file]
 
 inv = json.loads(
     subprocess.run(
@@ -99,7 +143,7 @@ for host in sorted(hostvars):
 
     data = yaml.safe_load(
         subprocess.run(
-            ["ansible-vault", "view", vault],
+            vault_base + [vault],
             cwd=root, check=True, capture_output=True, text=True,
         ).stdout
     )
@@ -116,7 +160,6 @@ for line in lines:
 PYEOF
 
   mv "$tmp" "$KNOWN_HOSTS"
-  trap - EXIT
   echo "Wrote ${KNOWN_HOSTS} ($(grep -c '^[^#]' "$KNOWN_HOSTS" || true) entries)." >&2
 }
 
@@ -131,4 +174,8 @@ if [ "$TOFU" = "1" ]; then
   export ANSIBLE_HOST_KEY_CHECKING=False
 fi
 
-exec ansible-playbook "$@"
+# Run (not exec) so the WORK_DIR cleanup trap fires afterwards; the cached
+# vault password (env + WORK_DIR pw file) stays available to the playbook.
+rc=0
+ansible-playbook "$@" || rc=$?
+exit "$rc"

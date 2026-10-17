@@ -8,6 +8,8 @@
 #   memory_mb  optional  default proxmox_vm_default_memory_mb
 #   disk_gb    optional  GROW-ONLY: omitted = keep the template's disk size;
 #                        smaller than the current size = hard failure
+#   onboot     optional  default proxmox_vm_default_onboot; autostart the VM
+#                        when the PVE host boots
 #
 # Example:
 # proxmox_vms:
@@ -28,6 +30,10 @@ proxmox_vm_node: "{{ inventory_hostname }}"
 # Per-VM resource defaults, used when a proxmox_vms item omits them.
 proxmox_vm_default_cores: 2
 proxmox_vm_default_memory_mb: 2048
+
+# Start VMs automatically when the PVE host boots. Without this a host
+# reboot (manual or unattended) leaves the VMs stopped.
+proxmox_vm_default_onboot: true
 
 # Full clone (--full 1): the template lives on dir-storage (qcow2) where a
 # linked clone would tie every VM disk to the template file.

@@ -7,6 +7,7 @@
   ansible.builtin.set_fact:
     vm_cores: "{{ vm.cores | default(proxmox_vm_default_cores) }}"
     vm_memory: "{{ vm.memory_mb | default(proxmox_vm_default_memory_mb) }}"
+    vm_onboot: "{{ 1 if (vm.onboot | default(proxmox_vm_default_onboot) | bool) else 0 }}"
     vm_ipconfig0: "ip={{ vm.ip }}/{{ proxmox_vm_netmask }},gw={{ proxmox_vm_bridge_ip }}"
     vm_existing_entry: >-
       {{ proxmox_vm_existing
@@ -59,6 +60,12 @@
   register: vm_set_memory
   changed_when: true
 
+# Takes effect immediately (next host boot) — no VM restart needed.
+- name: Set start on host boot
+  ansible.builtin.command: qm set {{ vm.vmid }} --onboot {{ vm_onboot }}
+  when: vm_cfg.onboot | default(0) | int != vm_onboot | int
+  changed_when: true
+
 # Exact string comparison: we always write the canonical ip=...,gw=... order.
 # A freshly cloned VM inherits the template's placeholder ipconfig0, fixed
 # here before the first boot.
@@ -104,30 +111,40 @@
     - vm_running | bool
     - vm_set_cores is changed or vm_set_memory is changed or vm_ci_changed | bool
 
+# PVE reports the size in the largest whole unit (size=32G, size=2T, ...).
 - name: Parse current scsi0 disk size
   ansible.builtin.set_fact:
-    vm_disk_current_gb: >-
+    vm_disk_parsed: >-
       {{ vm_cfg.scsi0 | default('')
-         | regex_search('size=([0-9]+)G', '\1')
-         | default([''], true) | first }}
+         | regex_search('size=([0-9]+)([KMGT])', '\1', '\2')
+         | default([], true) }}
   when: vm.disk_gb is defined
 
 - name: Refuse to touch an unparsable disk size
   ansible.builtin.assert:
-    that: vm_disk_current_gb | length > 0
+    that: vm_disk_parsed | length == 2
     fail_msg: >-
-      {{ vm.name }} ({{ vm.vmid }}): cannot parse a GiB size out of scsi0
+      {{ vm.name }} ({{ vm.vmid }}): cannot parse a size out of scsi0
       '{{ vm_cfg.scsi0 | default('<missing>') }}' — refusing to touch the disk.
+  when: vm.disk_gb is defined
+
+- name: Convert current disk size to GiB
+  ansible.builtin.set_fact:
+    vm_disk_current_gb: >-
+      {{ (vm_disk_parsed[0] | int)
+         * {'K': 1, 'M': 1024, 'G': 1048576, 'T': 1073741824}[vm_disk_parsed[1]]
+         / 1048576 }}
   when: vm.disk_gb is defined
 
 - name: Refuse disk shrink (grow-only)
   ansible.builtin.assert:
-    that: vm.disk_gb | int >= vm_disk_current_gb | int
+    that: vm.disk_gb | int >= vm_disk_current_gb | float
     fail_msg: >-
       {{ vm.name }} ({{ vm.vmid }}): disk_gb: {{ vm.disk_gb }} is smaller than
-      the current scsi0 size of {{ vm_disk_current_gb }}G. Shrinking a disk is
-      destructive and not supported — raise disk_gb to at least
-      {{ vm_disk_current_gb }}, or drop the disk_gb line to keep the current size.
+      the current scsi0 size of {{ vm_disk_current_gb | float | round(2) }}G.
+      Shrinking a disk is destructive and not supported — raise disk_gb to at
+      least {{ vm_disk_current_gb | float | round(0, 'ceil') | int }}, or drop
+      the disk_gb line to keep the current size.
   when: vm.disk_gb is defined
 
 # Live-safe: the guest's cloud-init growpart grows the partition/filesystem
@@ -136,7 +153,7 @@
   ansible.builtin.command: qm disk resize {{ vm.vmid }} scsi0 {{ vm.disk_gb }}G
   when:
     - vm.disk_gb is defined
-    - vm.disk_gb | int > vm_disk_current_gb | int
+    - vm.disk_gb | int > vm_disk_current_gb | float
   changed_when: true
 
 - name: Regenerate cloud-init image on running VM

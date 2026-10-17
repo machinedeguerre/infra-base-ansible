@@ -1,0 +1,101 @@
+---
+# kubernetes — k3s via the official k3s.orchestration collection, plus
+# declarative manifest management. Supports multiple clusters per project.
+#
+# Dependency: the k3s.orchestration collection (k3s-io/k3s-ansible), pinned
+# by commit SHA in the project's collections/requirements.yml — same supply
+# chain convention as infra.base itself.
+#
+# Inventory contract — one parent group per cluster, named k3s_<cluster>,
+# with the children k3s_<cluster>_server (control plane) and
+# k3s_<cluster>_agent (workers); every cluster group sits under the umbrella
+# group k3s_cluster (playbook gate + drift_report). A single server node is
+# a complete cluster. Example:
+#
+#   k3s_cluster:
+#     children:
+#       k3s_internal:
+#         children:
+#           k3s_internal_server: { hosts: { myinternalhost: } }
+#           k3s_internal_agent: { hosts: {} }
+#       k3s_public:
+#         children:
+#           k3s_public_server: { hosts: { web1: } }
+#           k3s_public_agent: { hosts: { web2: } }
+#
+# Each cluster group sets its identity and token in its group_vars:
+#   inventory/group_vars/k3s_<cluster>/main.yml: kubernetes_cluster: <cluster>
+#   inventory/group_vars/k3s_<cluster>/kubernetes_token.vault.yml (generated
+#   with `./infratool generate_kubernetes_token <cluster>`)
+#
+# Manifests: every *.yml/*.yaml under kubernetes_manifests_src (on the
+# controller, jinja-templated) is deployed to the cluster's FIRST server's
+# /var/lib/rancher/k3s/server/manifests/ as ansible-<name>. k3s applies and
+# keeps them in sync automatically; removing a file from the source dir
+# removes it from the node, and k3s then deletes the resources (prune).
+#
+# Helm works through the same directory via k3s' built-in helm-controller —
+# no helm binary needed anywhere. Example manifest:
+#   apiVersion: helm.cattle.io/v1
+#   kind: HelmChart
+#   metadata: { name: mychart, namespace: kube-system }
+#   spec:
+#     repo: https://charts.example.org
+#     chart: mychart
+#     version: 1.2.3
+#     targetNamespace: myapp
+#     valuesContent: |-
+#       someOption: true
+# (HelmChartConfig customizes the charts k3s itself ships, e.g. traefik.)
+#
+# Secrets: manifest files are jinja-templated, so a kubernetes Secret
+# manifest can reference vault-encrypted ansible variables — secrets live in
+# ansible-vault like everything else. Escape literal {{ }} needed by k8s
+# (rare) with {% raw %} ... {% endraw %}.
+
+# REQUIRED. Cluster name (also the suffix of its inventory groups). Set it in
+# the cluster group's group_vars, e.g. kubernetes_cluster: internal.
+kubernetes_cluster: ""
+
+# Inventory group names for this cluster, derived from the cluster name.
+kubernetes_server_group: "k3s_{{ kubernetes_cluster }}_server"
+kubernetes_agent_group: "k3s_{{ kubernetes_cluster }}_agent"
+
+# k3s version (pinned; bumping it is a deliberate decision — the collection
+# upgrades a node when the installed version is older than this).
+kubernetes_version: "v1.36.5+k3s1"
+
+# REQUIRED. Cluster join token, shared by all nodes in the cluster. Generate
+# once per cluster with `./infratool generate_kubernetes_token <cluster>`
+# (vault-encrypted into inventory/group_vars/k3s_<cluster>/). Changing it
+# later is disruptive: agents must re-join.
+kubernetes_token: ""
+
+# Encrypt kubernetes Secrets at rest in the datastore, enabled from day one
+# (enabling later requires a migration). k3s generates and manages the key
+# itself (/var/lib/rancher/k3s/server/cred/encryption-config.json); rotate
+# with `k3s secrets-encrypt rotate-keys`.
+kubernetes_secrets_encryption: true
+
+# Extra command line args passed through to k3s server/agent.
+kubernetes_extra_server_args: ""
+kubernetes_extra_agent_args: ""
+
+# Extra raw config.yaml content for the server (appended after the
+# secrets-encryption setting above).
+kubernetes_server_config_extra: ""
+
+# Directory with manifest sources, relative to the playbook dir (absolute
+# paths work too). Missing directory simply means no manifests. Manifests
+# are cluster-wide: they are deployed on the cluster's first server only.
+kubernetes_manifests_src: "files/k3s-manifests/{{ kubernetes_cluster }}"
+
+# Where the cluster admin kubeconfig is fetched on the control node: a
+# PROJECT-LOCAL file per cluster, deliberately not ~/.kube/config — kubectl
+# in one project's dev shell must never be able to point at another
+# project's cluster. The context/cluster/user in the file are renamed to the
+# cluster name, so several cluster files combine cleanly in a colon-joined
+# KUBECONFIG (exported by the project's dev shell; switch with
+# `kubectl config use-context <cluster>`). Gitignore the files — they
+# contain the cluster admin credentials.
+kubernetes_kubeconfig: "{{ playbook_dir | dirname }}/.kubeconfig-{{ kubernetes_cluster }}"

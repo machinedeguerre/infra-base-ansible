@@ -1,0 +1,53 @@
+---
+# Declarative manifests via k3s' own manifests directory: files placed there
+# are applied and kept in sync by the AddonsController, and deleting a file
+# deletes the corresponding resources. Our files are prefixed ansible- so the
+# prune below never touches k3s' bundled addons (traefik, coredns, ...).
+
+- name: Wait for the kubernetes API to be ready
+  ansible.builtin.command: k3s kubectl get --raw /readyz
+  register: _kubernetes_readyz
+  retries: 24
+  delay: 5
+  until: _kubernetes_readyz.rc == 0
+  changed_when: false
+
+- name: Collect manifest sources
+  ansible.builtin.set_fact:
+    _kubernetes_manifest_files: >-
+      {{ (lookup('ansible.builtin.fileglob', _kubernetes_src ~ '/*.yml', wantlist=True)
+          + lookup('ansible.builtin.fileglob', _kubernetes_src ~ '/*.yaml', wantlist=True))
+         | sort }}
+  vars:
+    _kubernetes_src: >-
+      {{ kubernetes_manifests_src if kubernetes_manifests_src is match('^/')
+         else playbook_dir ~ '/' ~ kubernetes_manifests_src }}
+
+- name: Deploy manifests
+  ansible.builtin.template:
+    src: "{{ item }}"
+    dest: /var/lib/rancher/k3s/server/manifests/ansible-{{ item | basename }}
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ _kubernetes_manifest_files }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
+- name: List deployed manifests
+  ansible.builtin.find:
+    paths: /var/lib/rancher/k3s/server/manifests
+    patterns: "ansible-*"
+  register: _kubernetes_deployed
+
+- name: Prune manifests no longer declared (k3s deletes their resources)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _kubernetes_deployed.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: >-
+    (item.path | basename) not in
+    (_kubernetes_manifest_files | map('basename')
+     | map('regex_replace', '^', 'ansible-') | list)

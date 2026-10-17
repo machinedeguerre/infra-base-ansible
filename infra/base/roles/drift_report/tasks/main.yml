@@ -40,6 +40,7 @@
 - name: Determine active optional roles
   ansible.builtin.set_fact:
     _drift_proxmox_active: "{{ proxmox_lan_addr is defined and proxmox_lan_addr | length > 0 }}"
+    _drift_k8s_active: "{{ 'k3s_cluster' in group_names }}"
 
 - name: Build expected state from role configuration
   ansible.builtin.set_fact:
@@ -74,6 +75,7 @@
              | ternary(['443'], []))
           + (haproxy_tcp_forwards | default([]) | map(attribute='listen_port') | map('string') | list)
           + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_ports | map('string') | list, []))
+          + (_drift_k8s_active | bool | ternary(drift_report_k8s_ports | map('string') | list, []))
           + (drift_report_expected_ports_extra | map('string') | list))
          | unique | list }}
 
@@ -90,7 +92,8 @@
       {{ _drift_ss_raw.stdout_lines
          | reject('search', ' 127\.| \[::1\]')
          | reject('search', ' (' + ((drift_report_allowed_processes
-             + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_processes, []))) | join('|')) + ')$')
+             + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_processes, []))
+             + (_drift_k8s_active | bool | ternary(drift_report_k8s_processes, []))) | join('|')) + ')$')
          | reject('search', ':(' + (_drift_expected_ports | join('|')) + ') ')
          | sort }}
 

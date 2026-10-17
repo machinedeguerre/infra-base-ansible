@@ -222,6 +222,14 @@ Generates an ed25519 keypair for SSH reverse tunnels and stores the private key 
 ./infratool generate_sshtunnel_keys myserver
 ```
 
+### generate_kubernetes_token `<cluster>`
+
+Generates the k3s join token for one cluster (shared by all nodes in that cluster — used by the kubernetes role) and stores it vault-encrypted in `inventory/group_vars/k3s_<cluster>/kubernetes_token.vault.yml`. Refuses to overwrite an existing token, since changing it forces every node to re-join.
+
+```
+./infratool generate_kubernetes_token internal
+```
+
 ### generate_proxmox_token_secret `<host>`
 
 Generates a random Proxmox API token secret for a host and stores it vault-encrypted in `inventory/host_vars/<host>/proxmox_token_secret.vault.yml`.

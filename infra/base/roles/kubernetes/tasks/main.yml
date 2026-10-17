@@ -1,0 +1,121 @@
+---
+- name: Validate cluster membership and token
+  ansible.builtin.assert:
+    that:
+      - kubernetes_cluster | length > 0
+      - kubernetes_server_group in group_names or kubernetes_agent_group in group_names
+      - groups[kubernetes_server_group] | default([]) | length > 0
+      - kubernetes_token | length > 0
+    fail_msg: >-
+      The kubernetes role requires: kubernetes_cluster set in the cluster
+      group's group_vars (inventory/group_vars/k3s_<cluster>/main.yml), the
+      host in that cluster's {{ kubernetes_server_group }} or
+      {{ kubernetes_agent_group }} inventory group, a non-empty server group,
+      and kubernetes_token set — generate it once per cluster with
+      `./infratool generate_kubernetes_token {{ kubernetes_cluster | default('<cluster>', true) }}`.
+
+- name: Compose k3s server config
+  ansible.builtin.set_fact:
+    _kubernetes_server_config: |-
+      {% if kubernetes_secrets_encryption | bool %}
+      secrets-encryption: true
+      {% endif %}
+      {{ kubernetes_server_config_extra }}
+    _kubernetes_first_server: >-
+      {{ inventory_hostname == groups[kubernetes_server_group][0] }}
+    _kubernetes_api_endpoint: >-
+      {{ hostvars[groups[kubernetes_server_group][0]].ansible_host
+         | default(groups[kubernetes_server_group][0]) }}
+
+# The k3s.orchestration roles are driven through their own variable names;
+# everything below maps this role's contract onto theirs.
+- name: Prepare node for k3s (k3s.orchestration.prereq)
+  ansible.builtin.include_role:
+    name: k3s.orchestration.prereq
+  vars:
+    server_group: "{{ kubernetes_server_group }}"
+    agent_group: "{{ kubernetes_agent_group }}"
+    k3s_version: "{{ kubernetes_version }}"
+    token: "{{ kubernetes_token }}"
+    api_endpoint: "{{ _kubernetes_api_endpoint }}"
+
+# k3s_server only re-fetches the kubeconfig (from the cluster's first server)
+# when k3s.yaml changed on it, tracked via its k3s-copy.yaml. If our
+# project-local kubeconfig is missing (fresh checkout, changed
+# kubernetes_kubeconfig path), clear that tracking copy so the fetch runs.
+- name: Check for the local kubeconfig
+  ansible.builtin.stat:
+    path: "{{ kubernetes_kubeconfig }}"
+  delegate_to: localhost
+  become: false
+  register: _kubernetes_kubeconfig_stat
+  when: _kubernetes_first_server | bool
+
+- name: Force kubeconfig re-fetch when the local copy is missing
+  ansible.builtin.file:
+    path: /etc/rancher/k3s/k3s-copy.yaml
+    state: absent
+  when:
+    - _kubernetes_first_server | bool
+    - not _kubernetes_kubeconfig_stat.stat.exists
+
+- name: Install k3s server (k3s.orchestration.k3s_server)
+  ansible.builtin.include_role:
+    name: k3s.orchestration.k3s_server
+  vars:
+    server_group: "{{ kubernetes_server_group }}"
+    agent_group: "{{ kubernetes_agent_group }}"
+    k3s_version: "{{ kubernetes_version }}"
+    token: "{{ kubernetes_token }}"
+    api_endpoint: "{{ _kubernetes_api_endpoint }}"
+    extra_server_args: "{{ kubernetes_extra_server_args }}"
+    server_config_yaml: "{{ _kubernetes_server_config }}"
+    # Project-local fetch destination. Any path other than the collection's
+    # magic default (~/.kube/config.new) also disables its merge into the
+    # global ~/.kube/config.
+    kubeconfig: "{{ kubernetes_kubeconfig }}"
+  when: kubernetes_server_group in group_names
+
+# The fetched file names its context/cluster/user "default"; rename them to
+# the cluster name so several clusters' files can be combined in a
+# colon-joined KUBECONFIG. No-op except right after a re-fetch (the
+# collection's own set-cluster command runs before this, inside its
+# change-detected fetch block, so the order always holds).
+- name: Check for the fetched kubeconfig
+  ansible.builtin.stat:
+    path: "{{ kubernetes_kubeconfig }}"
+  delegate_to: localhost
+  become: false
+  register: _kubernetes_kubeconfig_fetched
+  when: _kubernetes_first_server | bool
+
+- name: Name the kubeconfig context after the cluster
+  ansible.builtin.replace:
+    path: "{{ kubernetes_kubeconfig }}"
+    regexp: '\bdefault\b'
+    replace: "{{ kubernetes_cluster }}"
+  delegate_to: localhost
+  become: false
+  when:
+    - _kubernetes_first_server | bool
+    - _kubernetes_kubeconfig_fetched.stat.exists
+
+- name: Install k3s agent (k3s.orchestration.k3s_agent)
+  ansible.builtin.include_role:
+    name: k3s.orchestration.k3s_agent
+  vars:
+    server_group: "{{ kubernetes_server_group }}"
+    agent_group: "{{ kubernetes_agent_group }}"
+    k3s_version: "{{ kubernetes_version }}"
+    token: "{{ kubernetes_token }}"
+    api_endpoint: "{{ _kubernetes_api_endpoint }}"
+    extra_agent_args: "{{ kubernetes_extra_agent_args }}"
+  when:
+    - kubernetes_agent_group in group_names
+    - kubernetes_server_group not in group_names
+
+# Manifests are cluster-wide; the first server's manifests directory is the
+# single source for the whole cluster.
+- name: Manage manifests
+  ansible.builtin.import_tasks: manifests.yml
+  when: _kubernetes_first_server | bool

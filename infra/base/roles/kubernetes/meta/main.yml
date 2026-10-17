@@ -1,0 +1,5 @@
+galaxy_info:
+  description: Kubernetes via k3s (wraps k3s.orchestration) with declarative manifests
+  license: MIT
+  min_ansible_version: "2.20"
+dependencies: []

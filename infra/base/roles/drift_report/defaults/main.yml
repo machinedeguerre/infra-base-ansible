@@ -54,6 +54,19 @@ drift_report_proxmox_ports:
 drift_report_proxmox_processes:
   - dnsmasq  # DHCP/DNS on the VM bridge, configured by the role
 
+# Expected state contributed by the infra.base.kubernetes role; applied only
+# when the host is in the k3s_cluster inventory group (same gate as the
+# playbook uses). No packages: k3s is a script-installed binary, invisible to
+# apt-mark.
+drift_report_k8s_ports:
+  - "6443"   # kube-apiserver
+  - "10250"  # kubelet
+  - "10256"  # kube-proxy healthz
+  - "8472"   # flannel vxlan (udp, kernel socket)
+drift_report_k8s_processes:
+  - k3s-server
+  - k3s-agent
+
 # Debian base-system packages typically marked "manual" by the installer.
 # Covers Debian 12 (bookworm) and 13 (trixie) bases.
 # Deliberately NOT ignored (should be flagged if present, since we remove

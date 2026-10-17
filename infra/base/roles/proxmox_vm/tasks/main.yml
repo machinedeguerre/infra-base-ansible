@@ -1,0 +1,15 @@
+---
+- name: Validate configuration
+  ansible.builtin.import_tasks: validation.yml
+
+- name: Gather Proxmox VM facts
+  ansible.builtin.import_tasks: facts.yml
+
+- name: Converge declared VMs
+  ansible.builtin.import_tasks: vms.yml
+
+- name: Handle undeclared VMs
+  ansible.builtin.import_tasks: prune.yml
+
+- name: Report
+  ansible.builtin.import_tasks: report.yml

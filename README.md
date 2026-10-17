@@ -114,12 +114,6 @@ $ ./infratool generate_vault_password
 
 Start using the collection roles!
 
-## Nebula CA journal
-
-Info about every certificate signing (host rotations and external bundles)
-is appended to `logs/nebula-cert-log.csv`. Commit it, so you have the
-fingerprints to put in `nebula_blocklist` when a cert must be revoked.
-
 ## Infratool commands
 
 Run `./infratool` without arguments to list available commands.

@@ -102,12 +102,17 @@ firewall:
 {% endif %}
 
 {% if nebula_unsafe_networks | default([]) | length > 0 %}
-    # Allow all traffic from sysop group to VM subnets
+    # Allow traffic into routed (unsafe) subnets: always from sysop, plus any
+    # per-subnet extra groups (nebula_unsafe_networks_extra_groups). These
+    # local_cidr rules are the ONLY rules that apply to this traffic — since
+    # nebula 1.9, rules without local_cidr match the host's own address only.
 {% for subnet in nebula_unsafe_networks %}
+{% for grp in (['sysop'] + (nebula_unsafe_networks_extra_groups | default({})).get(subnet, [])) | unique %}
     - port: any
       proto: any
-      group: sysop
+      group: {{ grp }}
       local_cidr: "{{ subnet }}"
+{% endfor %}
 {% endfor %}
 {% endif %}
 

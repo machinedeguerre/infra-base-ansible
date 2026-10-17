@@ -1,0 +1,82 @@
+---
+- name: Normalize proxmox_vms
+  ansible.builtin.set_fact:
+    proxmox_vms: "{{ proxmox_vms | default([], true) }}"
+
+- name: Ensure required network variables are set
+  ansible.builtin.assert:
+    that:
+      - proxmox_lan_addr is defined
+      - proxmox_lan_addr | length > 0
+      - proxmox_lan_netmask is defined
+      - proxmox_lan_netmask | length > 0
+      - proxmox_dhcp_range_start is defined
+      - proxmox_dhcp_range_start | length > 0
+      - proxmox_dhcp_range_end is defined
+      - proxmox_dhcp_range_end | length > 0
+    fail_msg: >-
+      Required network variables must be set per host:
+      - proxmox_lan_addr
+      - proxmox_lan_netmask (CIDR format, e.g. "24")
+      - proxmox_dhcp_range_start
+      - proxmox_dhcp_range_end
+
+- name: Validate each VM declaration
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is match('^[a-z0-9][a-z0-9-]*$')
+      - item.vmid is defined
+      - item.vmid | int > 0
+      - item.vmid | int != proxmox_vm_template_id | int
+      - item.ip is defined
+      - item.ip | length > 0
+      - item.cores | default(1) | int > 0
+      - item.memory_mb | default(1) | int > 0
+      - item.disk_gb | default(1) | int > 0
+    fail_msg: >-
+      Invalid proxmox_vms entry {{ item }}: name (required) must match
+      ^[a-z0-9][a-z0-9-]*$, vmid (required) must be a positive integer other
+      than the template's {{ proxmox_vm_template_id }}, ip is required, and
+      cores/memory_mb/disk_gb must be positive integers when given.
+  loop: "{{ proxmox_vms }}"
+  loop_control:
+    label: "{{ item.name | default(item) }}"
+
+- name: Ensure vmid, name and ip are unique across proxmox_vms
+  ansible.builtin.assert:
+    that:
+      - proxmox_vms | map(attribute='vmid') | map('int') | unique | length == proxmox_vms | length
+      - proxmox_vms | map(attribute='name') | unique | length == proxmox_vms | length
+      - proxmox_vms | map(attribute='ip') | unique | length == proxmox_vms | length
+    fail_msg: "proxmox_vms entries must have unique vmid, name and ip."
+
+# The repo avoids the netaddr/ipaddr filter dependency; the target host's
+# python3 stdlib does the subnet math instead.
+- name: Check each VM IP is inside the VM subnet and outside the DHCP range
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import ipaddress, sys
+        ip = ipaddress.ip_address(sys.argv[1])
+        gw = ipaddress.ip_address(sys.argv[2])
+        net = ipaddress.ip_network(f"{sys.argv[2]}/{sys.argv[3]}", strict=False)
+        lo = ipaddress.ip_address(sys.argv[4])
+        hi = ipaddress.ip_address(sys.argv[5])
+        if ip not in net:
+            sys.exit(f"{ip} is outside the VM subnet {net}")
+        if ip in (gw, net.network_address, net.broadcast_address):
+            sys.exit(f"{ip} collides with the gateway/network/broadcast address of {net}")
+        if lo <= ip <= hi:
+            sys.exit(f"{ip} is inside the DHCP range {lo}-{hi} — pick a static IP outside it")
+      - "{{ item.ip }}"
+      - "{{ proxmox_vm_bridge_ip }}"
+      - "{{ proxmox_vm_netmask }}"
+      - "{{ proxmox_vm_dhcp_range_start }}"
+      - "{{ proxmox_vm_dhcp_range_end }}"
+  loop: "{{ proxmox_vms }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.ip }})"
+  changed_when: false

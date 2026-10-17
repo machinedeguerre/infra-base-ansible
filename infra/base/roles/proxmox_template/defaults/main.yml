@@ -33,7 +33,6 @@ proxmox_template_packer_install_path: "/usr/local/bin/packer"
 # Preseed configuration
 proxmox_template_preseed_mirror: "http://deb.debian.org/debian"
 proxmox_template_preseed_mirror_directory: "/debian"
-proxmox_template_preseed_suite: "bookworm"
 proxmox_template_preseed_locale: "en_US.UTF-8"
 proxmox_template_preseed_timezone: "UTC"
 proxmox_template_preseed_keyboard: "us"

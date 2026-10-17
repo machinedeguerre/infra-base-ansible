@@ -1,0 +1,51 @@
+---
+# Undeclared VMs (proxmox_vm_unmanaged, computed in vars/main.yml) are only
+# reported by default — see report.yml. Destruction requires an explicit
+# proxmox_vm_prune: true, and only ever touches VMIDs inside
+# proxmox_vm_managed_vmid_range; templates are always exempt.
+
+- name: "Prune: shut down unmanaged VM"
+  ansible.builtin.command: >-
+    qm shutdown {{ item.vmid }} --timeout {{ proxmox_vm_shutdown_timeout }}
+  loop: "{{ proxmox_vm_unmanaged }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }} ({{ item.vmid }})"
+  when:
+    - proxmox_vm_prune | bool
+    - item.status | default('') == 'running'
+  failed_when: false  # a hung guest is handled by the qm stop below
+  changed_when: true
+
+- name: "Prune: stop unmanaged VM"
+  ansible.builtin.command: qm stop {{ item.vmid }}
+  loop: "{{ proxmox_vm_unmanaged }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }} ({{ item.vmid }})"
+  when: proxmox_vm_prune | bool
+  failed_when: false  # already-stopped VMs are fine
+  changed_when: true
+
+- name: "Prune: destroy unmanaged VM"
+  ansible.builtin.command: >-
+    qm destroy {{ item.vmid }} --purge --destroy-unreferenced-disks 1
+  loop: "{{ proxmox_vm_unmanaged }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }} ({{ item.vmid }})"
+  when: proxmox_vm_prune | bool
+  changed_when: true
+
+- name: "Prune: record destroyed VMs"
+  ansible.builtin.set_fact:
+    proxmox_vm_pruned: "{{ proxmox_vm_unmanaged }}"
+  when:
+    - proxmox_vm_prune | bool
+    - proxmox_vm_unmanaged | length > 0
+
+# Overrides the lazily computed role var so report.yml no longer lists the
+# destroyed VMs as unmanaged.
+- name: "Prune: clear unmanaged list"
+  ansible.builtin.set_fact:
+    proxmox_vm_unmanaged: []
+  when:
+    - proxmox_vm_prune | bool
+    - proxmox_vm_pruned | length > 0

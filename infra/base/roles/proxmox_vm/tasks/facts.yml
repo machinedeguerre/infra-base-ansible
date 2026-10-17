@@ -1,0 +1,71 @@
+---
+- name: List existing VMs on the node
+  ansible.builtin.command: >-
+    pvesh get /nodes/{{ proxmox_vm_node }}/qemu --output-format json
+  register: _pvm_qemu_raw
+  changed_when: false
+
+- name: Parse existing VM list
+  ansible.builtin.set_fact:
+    proxmox_vm_existing: "{{ _pvm_qemu_raw.stdout | from_json }}"
+
+- name: Assert the clone template exists
+  ansible.builtin.assert:
+    that:
+      - proxmox_vm_existing
+        | selectattr('template', 'defined')
+        | selectattr('template', 'in', [1, '1'])
+        | selectattr('vmid', 'in', [proxmox_vm_template_id | int, proxmox_vm_template_id | string])
+        | list | length > 0
+    fail_msg: >-
+      Template VM {{ proxmox_vm_template_id }} not found on node
+      {{ proxmox_vm_node }}. Run the proxmox_template role first.
+
+# Never adopt: an existing VM with the declared vmid but another name (or a
+# template) means the declaration points at somebody else's VM.
+- name: Refuse VMID collisions with differently-named VMs
+  ansible.builtin.assert:
+    that:
+      - _pvm_match | length == 0 or
+        ((_pvm_match | first).name | default('') == item.name and
+         (_pvm_match | first).template | default(0) | int != 1)
+    fail_msg: >-
+      VMID {{ item.vmid }} already exists on {{ proxmox_vm_node }} as
+      '{{ (_pvm_match | first).name | default('?') }}'
+      {{- ' (a template)' if (_pvm_match | first).template | default(0) | int == 1 else '' }}
+      — refusing to adopt it as '{{ item.name }}'. Pick another vmid or remove
+      the existing VM manually.
+  vars:
+    _pvm_match: >-
+      {{ proxmox_vm_existing
+         | selectattr('vmid', 'in', [item.vmid | int, item.vmid | string])
+         | list }}
+  loop: "{{ proxmox_vms }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.vmid }})"
+
+# Staged persistently (not /tmp) so the content comparison against the VMs'
+# sshkeys config keeps working across runs.
+- name: Ensure staging directory for cloud-init SSH keys exists
+  ansible.builtin.file:
+    path: /etc/pve-ansible
+    state: directory
+    mode: "0755"
+
+- name: Stage sysops SSH keys for cloud-init
+  ansible.builtin.copy:
+    src: "{{ proxmox_vm_ci_sshkeys_src if proxmox_vm_ci_sshkeys_src is match('^/') else playbook_dir ~ '/' ~ proxmox_vm_ci_sshkeys_src }}"
+    dest: /etc/pve-ansible/vm-sshkeys.pub
+    mode: "0644"
+
+- name: Read staged SSH keys for comparison
+  ansible.builtin.slurp:
+    src: /etc/pve-ansible/vm-sshkeys.pub
+  register: _pvm_sshkeys_slurp
+
+- name: Initialize run state
+  ansible.builtin.set_fact:
+    proxmox_vm_sshkeys_content: "{{ _pvm_sshkeys_slurp.content | b64decode }}"
+    proxmox_vm_pending_restart: []
+    proxmox_vm_created: []
+    proxmox_vm_pruned: []

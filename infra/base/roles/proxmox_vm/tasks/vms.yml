@@ -1,0 +1,7 @@
+---
+- name: Converge each declared VM
+  ansible.builtin.include_tasks: vm_item.yml
+  loop: "{{ proxmox_vms }}"
+  loop_control:
+    loop_var: vm
+    label: "{{ vm.name }} ({{ vm.vmid }})"

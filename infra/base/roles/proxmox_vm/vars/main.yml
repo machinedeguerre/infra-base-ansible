@@ -1,0 +1,12 @@
+---
+proxmox_vm_unmanaged: >-
+  {{ ((proxmox_vm_existing | rejectattr('template', 'defined') | list)
+      + (proxmox_vm_existing | selectattr('template', 'defined')
+         | rejectattr('template', 'in', [1, '1']) | list))
+     | rejectattr('vmid', 'in', [proxmox_vm_template_id | int, proxmox_vm_template_id | string])
+     | selectattr('vmid', '>=', proxmox_vm_managed_vmid_range[0] | int)
+     | selectattr('vmid', '<=', proxmox_vm_managed_vmid_range[1] | int)
+     | rejectattr('vmid', 'in',
+         (proxmox_vms | map(attribute='vmid') | map('int') | list)
+         + (proxmox_vms | map(attribute='vmid') | map('string') | list))
+     | sort(attribute='vmid') }}

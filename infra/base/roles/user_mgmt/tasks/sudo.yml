@@ -1,4 +1,11 @@
 ---
+# On cloud-init VMs the default user also matches NOPASSWD in
+# /etc/sudoers.d/90-cloud-init-users. That file is left in place on purpose:
+# cloud-init recreates it whenever the instance-id changes (e.g. after a
+# cloud-init config change + restart), so deleting it would need re-applying.
+# Instead we rely on sudoers' last-match rule: sudoers.d is read in lexical
+# order, digits sort before letters, so the per-user file written below is
+# parsed later and its (passworded) entry wins.
 - name: "Configure sudo (password or passwordless)"
   ansible.builtin.copy:
     dest: "/etc/sudoers.d/{{ item.username }}"

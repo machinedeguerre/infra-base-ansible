@@ -35,6 +35,17 @@ nebula_pki_dir: /etc/nebula/pki
 #   - "172.25.1.0/24"
 nebula_unsafe_networks: []
 
+# Extra firewall groups allowed into specific unsafe networks, beyond the
+# always-present sysop rule. Keyed by subnet (must match an entry in
+# nebula_unsafe_networks on the same host). Note that forwarded traffic
+# presents the FORWARDING node's cert identity: allowing "infra" into a VM
+# subnet admits every managed node AND anything those nodes route (e.g. VMs
+# behind another PVE gateway). Subnets not listed here stay sysop-only.
+# Example (VM subnet open to managed nodes, admin LAN stays sysop-only):
+# nebula_unsafe_networks_extra_groups:
+#   "172.25.1.0/24": ["infra"]
+nebula_unsafe_networks_extra_groups: {}
+
 # Unsafe routes - route non-Nebula subnets through Nebula tunnels.
 # Configure on hosts that need to REACH a non-Nebula subnet via a Nebula peer.
 # Each entry needs:

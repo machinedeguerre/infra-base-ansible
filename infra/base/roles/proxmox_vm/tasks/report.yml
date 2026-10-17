@@ -1,0 +1,45 @@
+---
+# Human summary at the end of the role run. Like drift_report: sections are
+# silent when there is nothing to say.
+
+- name: VMs created this run
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: created VM(s): {{ proxmox_vm_created | join(', ') }}"
+  when: proxmox_vm_created | length > 0
+
+- name: Inventory snippet for new VMs
+  ansible.builtin.debug:
+    msg: |-
+      Add the new VM(s) to inventory/hosts.yml and onboard them (see the
+      host_vars README for the full steps):
+      {% for name in proxmox_vm_created %}
+          {{ name }}:
+            ansible_host: {{ (proxmox_vms | selectattr('name', 'equalto', name) | first).ip }}
+      {% endfor %}
+  when: proxmox_vm_created | length > 0
+
+- name: Changes pending a restart
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {% for p in proxmox_vm_pending_restart %}{{ p.name }} ({{ p.vmid }}){{ ', ' if not loop.last else '' }}{% endfor %}:
+      cores/memory/cloud-init changes are written but only take effect after a
+      stop/start. Run 'qm shutdown <vmid> && qm start <vmid>' on the host, or
+      re-run with proxmox_vm_allow_restart: true.
+  when: proxmox_vm_pending_restart | length > 0
+
+- name: Unmanaged VMs (report only)
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: VMs on the node but not in proxmox_vms:
+      {% for u in proxmox_vm_unmanaged %}{{ u.name | default('unnamed') }} ({{ u.vmid }}){{ ', ' if not loop.last else '' }}{% endfor %}.
+      They are left untouched; set proxmox_vm_prune: true to destroy VMs
+      inside proxmox_vm_managed_vmid_range.
+  when: proxmox_vm_unmanaged | length > 0
+
+- name: Pruned VMs
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: destroyed unmanaged VM(s):
+      {% for u in proxmox_vm_pruned %}{{ u.name | default('unnamed') }} ({{ u.vmid }}){{ ', ' if not loop.last else '' }}{% endfor %}.
+  when: proxmox_vm_pruned | length > 0

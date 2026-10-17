@@ -1,0 +1,62 @@
+---
+# Declared VMs on this Proxmox host. Each item:
+#   name       REQUIRED  ^[a-z0-9][a-z0-9-]*$ — becomes the inventory hostname
+#   vmid       REQUIRED  unique integer, must not equal proxmox_vm_template_id
+#   ip         REQUIRED  static IPv4 inside the VM subnet, OUTSIDE the DHCP
+#                        range (and not the gateway/network/broadcast address)
+#   cores      optional  default proxmox_vm_default_cores
+#   memory_mb  optional  default proxmox_vm_default_memory_mb
+#   disk_gb    optional  GROW-ONLY: omitted = keep the template's disk size;
+#                        smaller than the current size = hard failure
+#
+# Example:
+# proxmox_vms:
+#   - name: testvm
+#     vmid: 100
+#     ip: 172.25.66.10
+#     cores: 2
+#     memory_mb: 2048
+#     disk_gb: 40
+proxmox_vms: []
+
+# Template to clone from (built by the proxmox_template role).
+proxmox_vm_template_id: "{{ proxmox_template_vm_id | default(9000) }}"
+
+# Proxmox node name (qm/pvesh run locally on the PVE host as root).
+proxmox_vm_node: "{{ inventory_hostname }}"
+
+# Per-VM resource defaults, used when a proxmox_vms item omits them.
+proxmox_vm_default_cores: 2
+proxmox_vm_default_memory_mb: 2048
+
+# Full clone (--full 1): the template lives on dir-storage (qcow2) where a
+# linked clone would tie every VM disk to the template file.
+proxmox_vm_clone_full: true
+proxmox_vm_clone_storage: "{{ proxmox_template_vm_disk_storage | default('local') }}"
+
+# VM network: the bridge IP doubles as gateway and DNS for the VMs, and the
+# DHCP range is what static VM IPs must stay out of. All default to the
+# proxmox role's settings for the host.
+proxmox_vm_bridge_ip: "{{ proxmox_lan_addr }}"
+proxmox_vm_netmask: "{{ proxmox_lan_netmask }}"
+proxmox_vm_dhcp_range_start: "{{ proxmox_dhcp_range_start }}"
+proxmox_vm_dhcp_range_end: "{{ proxmox_dhcp_range_end }}"
+
+# Cloud-init identity for the VMs: login user and the SSH public keys laid
+# down for it. Defaults mirror what proxmox_template bakes into the template.
+proxmox_vm_ci_user: "{{ proxmox_template_ci_user | default('user') }}"
+proxmox_vm_ci_sshkeys_src: "{{ proxmox_template_ci_sshkeys_src | default('files/pubkeys/sysops.pubkeys') }}"
+
+# Restart policy: cores/memory/cloud-init changes are always written to the
+# config, but a running VM is never restarted automatically. Such VMs are
+# listed in a "pending restart" report instead. Set allow_restart: true to
+# let the role do a shutdown (escalating to stop after the timeout) + start.
+proxmox_vm_allow_restart: false
+proxmox_vm_shutdown_timeout: 120
+
+# Prune policy: VMs on the node that are not declared in proxmox_vms are only
+# reported by default. Destruction requires BOTH proxmox_vm_prune: true AND a
+# vmid inside the managed range — VMIDs outside the fence are deliberately
+# manual and never touched. Templates are always exempt.
+proxmox_vm_prune: false
+proxmox_vm_managed_vmid_range: [100, 8999]

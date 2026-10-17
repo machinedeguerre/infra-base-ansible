@@ -1,0 +1,199 @@
+---
+# Converge a single declared VM (loop_var: vm). Pattern: read the config
+# once, then one `qm set` per field, each guarded by an exact diff — a second
+# run matches everything and changes nothing.
+
+- name: Compute effective settings
+  ansible.builtin.set_fact:
+    vm_cores: "{{ vm.cores | default(proxmox_vm_default_cores) }}"
+    vm_memory: "{{ vm.memory_mb | default(proxmox_vm_default_memory_mb) }}"
+    vm_ipconfig0: "ip={{ vm.ip }}/{{ proxmox_vm_netmask }},gw={{ proxmox_vm_bridge_ip }}"
+    vm_existing_entry: >-
+      {{ proxmox_vm_existing
+         | selectattr('vmid', 'in', [vm.vmid | int, vm.vmid | string])
+         | list | first | default({}) }}
+
+- name: "Clone VM from template {{ proxmox_vm_template_id }}"
+  ansible.builtin.command: >-
+    qm clone {{ proxmox_vm_template_id }} {{ vm.vmid }}
+    --name {{ vm.name }}
+    --full {{ '1' if proxmox_vm_clone_full | bool else '0' }}
+    --storage {{ proxmox_vm_clone_storage }}
+  when: vm_existing_entry | length == 0
+  register: vm_clone
+  changed_when: true
+
+- name: Record newly created VM
+  ansible.builtin.set_fact:
+    proxmox_vm_created: "{{ proxmox_vm_created + [vm.name] }}"
+  when: vm_clone is changed
+
+- name: Read current configuration
+  ansible.builtin.command: >-
+    pvesh get /nodes/{{ proxmox_vm_node }}/qemu/{{ vm.vmid }}/config --output-format json
+  register: vm_cfg_raw
+  changed_when: false
+
+# A freshly cloned VM is not started yet, so the empty vm_existing_entry
+# correctly falls back to 'stopped' here.
+- name: Parse configuration
+  ansible.builtin.set_fact:
+    vm_cfg: "{{ vm_cfg_raw.stdout | from_json }}"
+    vm_running: "{{ vm_existing_entry.status | default('stopped') == 'running' }}"
+
+- name: Set name
+  ansible.builtin.command: qm set {{ vm.vmid }} --name {{ vm.name }}
+  when: vm_cfg.name | default('') != vm.name
+  changed_when: true
+
+# PVE >= 8 returns some numeric config values as strings — cast both sides.
+- name: Set cores
+  ansible.builtin.command: qm set {{ vm.vmid }} --cores {{ vm_cores }}
+  when: vm_cfg.cores | default(0) | int != vm_cores | int
+  register: vm_set_cores
+  changed_when: true
+
+- name: Set memory
+  ansible.builtin.command: qm set {{ vm.vmid }} --memory {{ vm_memory }}
+  when: vm_cfg.memory | default(0) | int != vm_memory | int
+  register: vm_set_memory
+  changed_when: true
+
+# Exact string comparison: we always write the canonical ip=...,gw=... order.
+# A freshly cloned VM inherits the template's placeholder ipconfig0, fixed
+# here before the first boot.
+- name: Set static IP configuration (cloud-init)
+  ansible.builtin.command: qm set {{ vm.vmid }} --ipconfig0 {{ vm_ipconfig0 }}
+  when: vm_cfg.ipconfig0 | default('') != vm_ipconfig0
+  register: vm_set_ipconfig
+  changed_when: true
+
+- name: Set DNS server (cloud-init)
+  ansible.builtin.command: qm set {{ vm.vmid }} --nameserver {{ proxmox_vm_bridge_ip }}
+  when: vm_cfg.nameserver | default('') != proxmox_vm_bridge_ip
+  register: vm_set_nameserver
+  changed_when: true
+
+- name: Set cloud-init user
+  ansible.builtin.command: qm set {{ vm.vmid }} --ciuser {{ proxmox_vm_ci_user }}
+  when: vm_cfg.ciuser | default('') != proxmox_vm_ci_user
+  register: vm_set_ciuser
+  changed_when: true
+
+# The config stores the keys percent-encoded; decode before comparing against
+# the staged file.
+- name: Set SSH keys (cloud-init)
+  ansible.builtin.command: qm set {{ vm.vmid }} --sshkeys /etc/pve-ansible/vm-sshkeys.pub
+  when: (vm_cfg.sshkeys | default('') | urldecode | trim) != (proxmox_vm_sshkeys_content | trim)
+  register: vm_set_sshkeys
+  changed_when: true
+
+- name: Note cloud-init changes
+  ansible.builtin.set_fact:
+    vm_ci_changed: >-
+      {{ vm_set_ipconfig is changed or vm_set_nameserver is changed
+         or vm_set_ciuser is changed or vm_set_sshkeys is changed }}
+
+# cores/memory/cloud-init only take effect after a stop/start; a running VM
+# is never restarted automatically (see proxmox_vm_allow_restart).
+- name: Flag pending restart
+  ansible.builtin.set_fact:
+    proxmox_vm_pending_restart: >-
+      {{ proxmox_vm_pending_restart + [{'name': vm.name, 'vmid': vm.vmid}] }}
+  when:
+    - vm_running | bool
+    - vm_set_cores is changed or vm_set_memory is changed or vm_ci_changed | bool
+
+- name: Parse current scsi0 disk size
+  ansible.builtin.set_fact:
+    vm_disk_current_gb: >-
+      {{ vm_cfg.scsi0 | default('')
+         | regex_search('size=([0-9]+)G', '\1')
+         | default([''], true) | first }}
+  when: vm.disk_gb is defined
+
+- name: Refuse to touch an unparsable disk size
+  ansible.builtin.assert:
+    that: vm_disk_current_gb | length > 0
+    fail_msg: >-
+      {{ vm.name }} ({{ vm.vmid }}): cannot parse a GiB size out of scsi0
+      '{{ vm_cfg.scsi0 | default('<missing>') }}' — refusing to touch the disk.
+  when: vm.disk_gb is defined
+
+- name: Refuse disk shrink (grow-only)
+  ansible.builtin.assert:
+    that: vm.disk_gb | int >= vm_disk_current_gb | int
+    fail_msg: >-
+      {{ vm.name }} ({{ vm.vmid }}): disk_gb: {{ vm.disk_gb }} is smaller than
+      the current scsi0 size of {{ vm_disk_current_gb }}G. Shrinking a disk is
+      destructive and not supported — raise disk_gb to at least
+      {{ vm_disk_current_gb }}, or drop the disk_gb line to keep the current size.
+  when: vm.disk_gb is defined
+
+# Live-safe: the guest's cloud-init growpart grows the partition/filesystem
+# at the next boot (or run growpart + resize2fs manually for immediate effect).
+- name: Grow disk scsi0
+  ansible.builtin.command: qm disk resize {{ vm.vmid }} scsi0 {{ vm.disk_gb }}G
+  when:
+    - vm.disk_gb is defined
+    - vm.disk_gb | int > vm_disk_current_gb | int
+  changed_when: true
+
+- name: Regenerate cloud-init image on running VM
+  ansible.builtin.command: qm cloudinit update {{ vm.vmid }}
+  when:
+    - vm_running | bool
+    - vm_ci_changed | bool
+  failed_when: false  # not available on older PVE; the pending-restart report still covers it
+  changed_when: true
+
+- name: Shut down VM to apply pending changes (proxmox_vm_allow_restart)
+  ansible.builtin.command: qm shutdown {{ vm.vmid }} --timeout {{ proxmox_vm_shutdown_timeout }}
+  when:
+    - proxmox_vm_allow_restart | bool
+    - vm_running | bool
+    - proxmox_vm_pending_restart | selectattr('name', 'equalto', vm.name) | list | length > 0
+  register: vm_shutdown
+  failed_when: false  # a hung guest is handled by the qm stop below
+  changed_when: true
+
+- name: Check status after shutdown
+  ansible.builtin.command: qm status {{ vm.vmid }}
+  when: vm_shutdown is changed
+  register: vm_status_after_shutdown
+  changed_when: false
+
+- name: Force stop when shutdown did not finish
+  ansible.builtin.command: qm stop {{ vm.vmid }}
+  when:
+    - vm_shutdown is changed
+    - "'running' in vm_status_after_shutdown.stdout"
+  changed_when: true
+
+- name: Mark VM as stopped and no longer pending restart
+  ansible.builtin.set_fact:
+    vm_running: false
+    proxmox_vm_pending_restart: >-
+      {{ proxmox_vm_pending_restart | rejectattr('name', 'equalto', vm.name) | list }}
+  when: vm_shutdown is changed
+
+- name: Check current status
+  ansible.builtin.command: qm status {{ vm.vmid }}
+  register: vm_status_now
+  changed_when: false
+
+- name: Start VM
+  ansible.builtin.command: qm start {{ vm.vmid }}
+  when: "'status: running' not in vm_status_now.stdout"
+  register: vm_start
+  changed_when: true
+
+- name: Wait for the guest agent after start
+  ansible.builtin.command: qm agent {{ vm.vmid }} ping
+  when: vm_start is changed
+  register: vm_agent_ping
+  retries: 30
+  delay: 5
+  until: vm_agent_ping.rc == 0
+  failed_when: false  # verification only — a missing agent must not fail the run
+  changed_when: false

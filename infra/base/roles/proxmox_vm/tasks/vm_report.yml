@@ -1,0 +1,26 @@
+---
+# Report-only: lists VMs that exist on the node but are not declared in
+# proxmox_vms (same fence logic as prune.yml via proxmox_vm_unmanaged in
+# vars/main.yml).
+- name: Normalize proxmox_vms
+  ansible.builtin.set_fact:
+    proxmox_vms: "{{ proxmox_vms | default([], true) }}"
+
+- name: List existing VMs on the node
+  ansible.builtin.command: >-
+    pvesh get /nodes/{{ proxmox_vm_node }}/qemu --output-format json
+  register: _pvm_report_raw
+  changed_when: false
+
+- name: Parse existing VM list
+  ansible.builtin.set_fact:
+    proxmox_vm_existing: "{{ _pvm_report_raw.stdout | from_json }}"
+
+- name: Unmanaged VMs on the node
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: VMs on the node but not in proxmox_vms:
+      {% for u in proxmox_vm_unmanaged %}{{ u.name | default('unnamed') }} ({{ u.vmid }}){{ ', ' if not loop.last else '' }}{% endfor %}.
+      Declare them, destroy them manually, or run main.yml with
+      proxmox_vm_prune: true.
+  when: proxmox_vm_unmanaged | length > 0

@@ -1,0 +1,16 @@
+// Managed by Ansible (auto_upgrades role)
+
+Unattended-Upgrade::Origins-Pattern {
+{% for origin in auto_upgrades_origins %}
+    "{{ origin }}";
+{% endfor %}
+};
+
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "{{ 'true' if auto_upgrades_remove_unused | bool else 'false' }}";
+Unattended-Upgrade::Remove-Unused-Dependencies "{{ 'true' if auto_upgrades_remove_unused | bool else 'false' }}";
+
+Unattended-Upgrade::Automatic-Reboot "{{ 'true' if auto_upgrades_reboot | bool else 'false' }}";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ auto_upgrades_reboot_time }}";
+
+// Visible in journald/syslog, not only /var/log/unattended-upgrades/
+Unattended-Upgrade::SyslogEnable "true";

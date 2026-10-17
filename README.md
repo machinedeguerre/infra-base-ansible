@@ -114,6 +114,32 @@ $ ./infratool generate_vault_password
 
 Start using the collection roles!
 
+## Updates
+
+Security updates are applied automatically on every host — PVE hosts included
+— by the `auto_upgrades` role: unattended-upgrades with Debian-Security as the
+only origin, daily, no automatic reboots. When an upgrade wants a reboot
+(kernel, libc), `drift_report` flags the host as running an older kernel than
+the newest installed; rebooting stays a deliberate action.
+
+Packages from the **Proxmox repository** (pve-manager, qemu-server,
+proxmox-kernel, ...) are intentionally NOT auto-upgraded — the Debian-Security
+origin does not match them, so hypervisor components never change unattended.
+Upgrade them manually, per PVE host:
+
+1. See what is pending: `apt update && apt list --upgradable` (or the
+   Updates panel in the PVE web UI).
+2. For a new pve-manager minor/major version, read the release notes first:
+   <https://pve.proxmox.com/wiki/Roadmap>.
+3. Run `apt full-upgrade` — never plain `apt upgrade` on a PVE host; Proxmox
+   requires full-upgrade/dist-upgrade semantics and a plain upgrade can leave
+   the system in a broken half-updated state.
+4. If a new kernel was installed (drift_report will flag it), plan a reboot.
+   Declared VMs autostart afterwards (`onboot`, set by the proxmox_vm role),
+   but expect VM downtime while the host reboots. Reboot one PVE host at a
+   time, and verify it is back before taking the next.
+5. Verify: `pveversion`, `qm list`, and a green `report.yml` run.
+
 ## Infratool commands
 
 Run `./infratool` without arguments to list available commands.

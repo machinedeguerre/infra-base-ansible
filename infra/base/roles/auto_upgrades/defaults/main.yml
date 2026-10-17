@@ -1,0 +1,26 @@
+---
+# auto_upgrades — unattended security updates on every host, PVE hosts
+# included. The machines patch themselves daily regardless of when Ansible
+# last ran; Ansible only declares the configuration.
+#
+# Default policy: Debian-Security is the ONLY origin. On Proxmox hosts this
+# deliberately leaves the Proxmox repository alone (pve-manager, qemu-server,
+# proxmox-kernel, ...) — those are upgraded manually with `apt full-upgrade`;
+# see the "Updates" section in the collection README for the procedure.
+
+# Origins-Pattern entries. ${distro_codename} is expanded by
+# unattended-upgrades itself (e.g. "trixie").
+auto_upgrades_origins:
+  - "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+
+# Remove kernels and dependencies that no longer have anything depending on
+# them (keeps /boot from filling up over the years).
+auto_upgrades_remove_unused: true
+
+# Automatic reboot when an upgrade requires it (kernel, libc). Default off:
+# drift_report already flags hosts running an older kernel than the newest
+# installed, so reboots stay a deliberate action. If enabling on VMs, stagger
+# auto_upgrades_reboot_time per host so the fleet never reboots at once —
+# and never enable it on the PVE hosts themselves.
+auto_upgrades_reboot: false
+auto_upgrades_reboot_time: "04:00"

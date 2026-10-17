@@ -60,6 +60,7 @@
               + common_packages_quality_of_life | default(_drift_cp_def.common_packages_quality_of_life)
               + common_packages_extra | default(_drift_cp_def.common_packages_extra)))
          + (docker_packages | default(_drift_docker_def.docker_packages))
+         + ['unattended-upgrades']
          + ((haproxy_sites | default([]) | length > 0) | ternary(['haproxy'], []))
          + (_drift_proxmox_active | bool | ternary(drift_report_proxmox_packages, []))
          + drift_report_package_ignore

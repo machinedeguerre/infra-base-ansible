@@ -85,6 +85,18 @@ kubernetes_extra_agent_args: ""
 # secrets-encryption setting above).
 kubernetes_server_config_extra: ""
 
+# containerd registry mirrors (k3s registries.yaml): map of registry host ->
+# list of mirror endpoint URLs. Endpoints only — credentials never belong in
+# this file; put an authenticating proxy inside the cluster instead (see the
+# registry-proxy manifest pattern). containerd falls back to the real
+# registry if every mirror fails. Changing this restarts k3s on the node:
+# brief API outage, running workloads are unaffected.
+# Example:
+#   kubernetes_registry_mirrors:
+#     git.example.org:
+#       - "http://127.0.0.1:30500"
+kubernetes_registry_mirrors: {}
+
 # Directory with manifest sources, relative to the playbook dir (absolute
 # paths work too). Missing directory simply means no manifests. Manifests
 # are cluster-wide: they are deployed on the cluster's first server only.

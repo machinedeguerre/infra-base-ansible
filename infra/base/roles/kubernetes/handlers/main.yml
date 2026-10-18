@@ -1,0 +1,5 @@
+---
+- name: Restart k3s
+  ansible.builtin.service:
+    name: "{{ 'k3s' if kubernetes_server_group in group_names else 'k3s-agent' }}"
+    state: restarted

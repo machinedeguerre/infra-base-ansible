@@ -114,6 +114,37 @@
     - kubernetes_agent_group in group_names
     - kubernetes_server_group not in group_names
 
+# containerd registry mirrors — per node (servers and agents alike).
+# Endpoints only, never credentials; see kubernetes_registry_mirrors in
+# defaults. A change restarts k3s via handler (brief API blip, workloads
+# keep running).
+- name: Compose containerd mirror config
+  ansible.builtin.set_fact:
+    _kubernetes_mirrors: >-
+      {{ _kubernetes_mirrors | default({})
+         | combine({item.key: {'endpoint': item.value}}) }}
+  loop: "{{ kubernetes_registry_mirrors | dict2items }}"
+
+- name: Configure containerd registry mirrors (registries.yaml)
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/registries.yaml
+    content: |
+      # Managed by ansible (infra.base.kubernetes). Mirror endpoints only —
+      # credentials never belong in this file.
+      {{ {'mirrors': _kubernetes_mirrors} | to_nice_yaml(indent=2) }}
+    owner: root
+    group: root
+    mode: "0644"
+  when: kubernetes_registry_mirrors | length > 0
+  notify: Restart k3s
+
+- name: Remove registries.yaml when no mirrors are declared
+  ansible.builtin.file:
+    path: /etc/rancher/k3s/registries.yaml
+    state: absent
+  when: kubernetes_registry_mirrors | length == 0
+  notify: Restart k3s
+
 # Manifests are cluster-wide; the first server's manifests directory is the
 # single source for the whole cluster.
 - name: Manage manifests

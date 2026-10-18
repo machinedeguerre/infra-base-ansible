@@ -1,0 +1,5 @@
+galaxy_info:
+  description: Pull-initiated restic backups over a reverse ssh tunnel
+  license: MIT
+  min_ansible_version: "2.20"
+dependencies: []

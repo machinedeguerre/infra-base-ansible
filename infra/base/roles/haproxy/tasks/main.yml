@@ -1,4 +1,19 @@
 ---
+# Each wildcard-cert vault file defines its own uniquely named variable
+# (wildcard_cert_<domain with dots as underscores>, written by
+# `infratool generate_wildcard_cert`) — assembled into one dict here. A
+# shared `wildcard_certs:` dict across several group_vars files would NOT
+# merge: ansible's default hash_behaviour=replace lets the last file win.
+# The legacy wildcard_certs dict is still honored for older vault files.
+- name: Assemble wildcard certs from per-domain vault variables
+  ansible.builtin.set_fact:
+    _haproxy_certs: >-
+      {{ dict(_hc_vals | map(attribute='domain') | zip(_hc_vals))
+         | combine(wildcard_certs | default({})) }}
+  vars:
+    _hc_names: "{{ query('ansible.builtin.varnames', '^wildcard_cert_') }}"
+    _hc_vals: "{{ _hc_names | map('extract', hostvars[inventory_hostname]) | list }}"
+
 - name: Validate configuration
   ansible.builtin.include_tasks: validation.yml
 

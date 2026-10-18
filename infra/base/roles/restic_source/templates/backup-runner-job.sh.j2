@@ -1,0 +1,39 @@
+#!/bin/sh
+# Managed by Ansible (restic_source role)
+# Runs as root via a tight sudoers entry. $1 is the job name requested by
+# the backup node over ssh; only declared jobs are accepted. The restic
+# repository is reached through the reverse tunnel the same ssh session
+# opened (rest-server on the backup node, bound to our localhost).
+#
+# The rest-server requires a PER-SESSION credential: the backup node
+# generates it per run and sends it as the first line of the session's
+# stdin (never argv/env). Only this job can use the tunnel port.
+set -eu
+
+export RESTIC_PASSWORD_FILE=/etc/restic/password
+
+IFS= read -r _session_pass || _session_pass=""
+if [ -z "$_session_pass" ]; then
+  echo "ERROR: no session credential on stdin (first line) - is run-backup.sh current?" >&2
+  exit 65
+fi
+# htpasswd-user in the backup node's per-session rest-server (not an ssh
+# or OS user) — must match HTPASSWD_USER in run-backup.sh.
+export RESTIC_REST_USERNAME="session"
+export RESTIC_REST_PASSWORD="$_session_pass"
+
+job="${1:-}"
+case "$job" in
+{% for job in backup_jobs %}
+  {{ job.name }})
+    repo="rest:http://127.0.0.1:{{ restic_source_rest_port }}/{{ job.name }}"
+    restic -r "$repo" cat config >/dev/null 2>&1 || restic -r "$repo" init
+    exec restic -r "$repo" backup {% for p in job.paths %}"{{ p }}" {% endfor %}{% for e in job.exclude | default([]) %}--exclude "{{ e }}" {% endfor %}
+
+    ;;
+{% endfor %}
+  *)
+    echo "ERROR: unknown backup job '${job}'. Declared jobs: {{ backup_jobs | map(attribute='name') | join(', ') }}" >&2
+    exit 64
+    ;;
+esac

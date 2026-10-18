@@ -14,7 +14,7 @@
 - name: Write combined PEM (fullchain + privkey) for each referenced cert
   ansible.builtin.copy:
     dest: "{{ haproxy_certs_dir }}/{{ item }}.pem"
-    content: "{{ wildcard_certs[item].fullchain }}{{ wildcard_certs[item].privkey }}"
+    content: "{{ _haproxy_certs[item].fullchain }}{{ _haproxy_certs[item].privkey }}"
     owner: root
     group: haproxy
     mode: "0640"

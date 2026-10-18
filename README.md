@@ -206,6 +206,22 @@ Decrypts the WireGuard private key for a host and calculates and prints its publ
 ./infratool get_wireguard_public_key myserver
 ```
 
+### generate_restic_password `<host>`
+
+Generates the restic repository password for a backup source host (used by the restic_source role) and stores it vault-encrypted in `inventory/host_vars/<host>/restic_password.vault.yml`. Refuses to overwrite an existing password — restores depend on it.
+
+```
+./infratool generate_restic_password myserver
+```
+
+### get_restic_password `<host>`
+
+Decrypts and prints the restic repository password for a backup source host, e.g. for putting it in a password manager (needed when running `backuper/prune-backup.sh` or restoring). Requires the GPG key, as always.
+
+```
+./infratool get_restic_password myserver
+```
+
 ### generate_sshd_hostkeys `<host>`
 
 Generates SSH host keys (ed25519, RSA, ECDSA) for a host and stores them vault-encrypted in `inventory/host_vars/<host>/hostkeys.vault.yml`.

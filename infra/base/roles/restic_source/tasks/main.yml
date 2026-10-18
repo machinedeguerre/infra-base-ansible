@@ -1,0 +1,119 @@
+---
+# The sysops keys always have pull access; backup_pubkeys_extra adds more
+# pullers on top.
+- name: Assemble authorized puller keys
+  ansible.builtin.set_fact:
+    _restic_source_pubkeys: >-
+      {{ (lookup('ansible.builtin.file', _restic_source_keys_path).splitlines()
+          | map('trim') | reject('equalto', '') | reject('match', '^#') | list)
+         + (backup_pubkeys_extra | default([])) }}
+  vars:
+    _restic_source_keys_path: >-
+      {{ restic_source_sysops_keys_src if restic_source_sysops_keys_src is match('^/')
+         else playbook_dir ~ '/' ~ restic_source_sysops_keys_src }}
+
+- name: Validate configuration
+  ansible.builtin.assert:
+    that:
+      - backup_jobs | length > 0
+      - backup_jobs | selectattr('name', 'defined') | list | length == backup_jobs | length
+      - backup_jobs | map(attribute='name') | select('match', '^[a-z0-9-]+$') | list | length == backup_jobs | length
+      - backup_jobs | map(attribute='name') | unique | length == backup_jobs | length
+      - backup_jobs | selectattr('paths', 'defined') | list | length == backup_jobs | length
+      - _restic_source_pubkeys | length > 0
+      - _restic_source_pubkeys | select('match', '^(ssh-|ecdsa-|sk-)') | list | length == _restic_source_pubkeys | length
+      - backup_restic_password | length > 0
+    fail_msg: >-
+      restic_source requires: backup_jobs (unique names matching ^[a-z0-9-]+$,
+      each with paths), valid ssh public keys (sysops keys file +
+      backup_pubkeys_extra), and backup_restic_password — generate it once
+      with `./infratool generate_restic_password {{ inventory_hostname }}`.
+
+- name: Install restic
+  ansible.builtin.apt:
+    name: restic
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create backup runner account
+  ansible.builtin.user:
+    name: "{{ restic_source_user }}"
+    system: true
+    shell: /bin/sh
+    home: "/home/{{ restic_source_user }}"
+    create_home: true
+    password: "!"
+
+- name: Ensure restic config directory exists
+  ansible.builtin.file:
+    path: /etc/restic
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy restic repository password
+  ansible.builtin.copy:
+    content: "{{ backup_restic_password }}\n"
+    dest: /etc/restic/password
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# Two layers: the shim runs as the ssh account and only escalates to the
+# root-owned job script (sudoers below permits exactly that); the job script
+# validates the requested job name against the declared jobs.
+- name: Install backup runner shim (runs as {{ restic_source_user }})
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # Managed by Ansible (restic_source role)
+      # Forced command: pass the ssh client's requested command (the job
+      # name) to the root-owned job script.
+      exec sudo -n /usr/local/sbin/backup-runner-job "${SSH_ORIGINAL_COMMAND:-}"
+    dest: /usr/local/bin/backup-runner-shim
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install backup runner job script (runs as root)
+  ansible.builtin.template:
+    src: backup-runner-job.sh.j2
+    dest: /usr/local/sbin/backup-runner-job
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Allow the runner account to execute exactly the job script
+  ansible.builtin.copy:
+    content: |
+      {{ restic_source_user }} ALL=(root) NOPASSWD: /usr/local/sbin/backup-runner-job
+    dest: "/etc/sudoers.d/{{ restic_source_user }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+
+- name: Authorize the pullers' keys (forced command, tunnel only)
+  ansible.builtin.authorized_key:
+    user: "{{ restic_source_user }}"
+    key: "{{ _restic_source_pubkeys | join('\n') }}"
+    key_options: 'restrict,port-forwarding,command="/usr/local/bin/backup-runner-shim"'
+    exclusive: true
+
+- name: Restrict the account's ssh surface (reverse tunnel bind only)
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible (restic_source role)
+      Match User {{ restic_source_user }}
+          AllowTcpForwarding remote
+          PermitListen 127.0.0.1:{{ restic_source_rest_port }}
+          PermitTTY no
+          X11Forwarding no
+    dest: /etc/ssh/sshd_config.d/15-backup-runner.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sshd

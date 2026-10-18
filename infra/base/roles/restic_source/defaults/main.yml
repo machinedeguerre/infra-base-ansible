@@ -1,0 +1,56 @@
+---
+# restic_source — pull-initiated restic backups.
+#
+# The backup node owns the schedule: it runs restic's rest-server
+# locally (ideally --append-only), opens an ssh session to this host with a
+# reverse forward (-R) exposing that rest-server on this host's localhost,
+# and the forced command here runs `restic backup` for one declared job,
+# pushing encrypted blobs back through the tunnel. Properties:
+#   - this host holds NO credentials toward the backup node
+#   - data is encrypted at the source (restic, AES-256 + MAC)
+#   - with --append-only, a compromised source cannot destroy old snapshots
+#
+# The ssh account (restic_source_user) is locked down: forced command only
+# (the client's requested command merely selects a declared job name), no
+# pty, and the reverse tunnel may only bind 127.0.0.1:<rest_port>.
+#
+# Backup node side: see run-backup.sh and prune-backup.sh in the shared backuper/
+# directory — the scripts the backup node administrator gets a copy of and
+# schedules. The sysops keys always have pull access; additional pullers
+# provide their ssh public key (backup_pubkeys_extra) and get nothing but an
+# ssh address. Multiple backup nodes pulling the same jobs each get their own
+# repos on their own storage.
+#
+# Secrets: the restic repo password is generated once per host with
+# `./infratool generate_restic_password <host>` (vault-encrypted host_vars,
+# variable backup_restic_password) and deployed root-only to
+# /etc/restic/password. Losing it makes the backups unreadable — the vault
+# (and your GPG key) is the authoritative copy.
+
+# Declared backup jobs. The backup node selects one by name per session.
+# Each item: name (^[a-z0-9-]+$, becomes the repo name on the backup node),
+# paths (list), exclude (optional list).
+# Example:
+# backup_jobs:
+#   - name: forgejo
+#     paths:
+#       - /var/backups/forgejo
+#     exclude:
+#       - /var/backups/forgejo/tmp
+backup_jobs: []
+
+# Ssh public keys allowed to pull backups: the sysops keys ALWAYS apply, plus
+# any extra pullers (backup nodes, a NAS) listed here as one-line
+# "ssh-ed25519 ..." strings. All get the same locked-down forced command,
+# and the resulting set is exclusive: removing an extra key revokes that
+# puller.
+restic_source_sysops_keys_src: "files/pubkeys/sysops.pubkeys"
+backup_pubkeys_extra: []
+
+# REQUIRED (vaulted). Restic repository password for this host's jobs.
+backup_restic_password: ""
+
+# Account the backup node logs in as, and the localhost port its reverse
+# tunnel may bind (must match REST_PORT in the backup node's run-backup.sh).
+restic_source_user: resticrunner
+restic_source_rest_port: 23817

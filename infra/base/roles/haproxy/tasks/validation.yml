@@ -28,19 +28,20 @@
   loop_control:
     label: "{{ item.name | default('<unnamed>') }}"
 
-- name: Every referenced cert must exist in wildcard_certs with fullchain and privkey
+- name: Every referenced cert must exist with fullchain and privkey
   ansible.builtin.assert:
     that:
-      - wildcard_certs[item.cert] is defined
-      - wildcard_certs[item.cert].fullchain is defined
-      - wildcard_certs[item.cert].fullchain | length > 0
-      - wildcard_certs[item.cert].privkey is defined
-      - wildcard_certs[item.cert].privkey | length > 0
+      - _haproxy_certs[item.cert] is defined
+      - _haproxy_certs[item.cert].fullchain is defined
+      - _haproxy_certs[item.cert].fullchain | length > 0
+      - _haproxy_certs[item.cert].privkey is defined
+      - _haproxy_certs[item.cert].privkey | length > 0
     fail_msg: >-
       Site '{{ item.name }}' references cert '{{ item.cert }}' which is not
-      present in wildcard_certs (or missing fullchain/privkey). Check that
+      available (or missing fullchain/privkey). Check that
       inventory/group_vars/all/wildcard_cert.{{ item.cert }}.vault.yml exists
-      and decrypts correctly.
+      and decrypts correctly (generate with
+      `./infratool generate_wildcard_cert {{ item.cert }}`).
   loop: "{{ haproxy_sites | selectattr('cert', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }} -> {{ item.cert }}"

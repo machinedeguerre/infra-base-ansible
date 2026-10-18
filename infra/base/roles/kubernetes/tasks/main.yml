@@ -134,7 +134,7 @@
       {{ {'mirrors': _kubernetes_mirrors} | to_nice_yaml(indent=2) }}
     owner: root
     group: root
-    mode: "0644"
+    mode: "0600"
   when: kubernetes_registry_mirrors | length > 0
   notify: Restart k3s
 

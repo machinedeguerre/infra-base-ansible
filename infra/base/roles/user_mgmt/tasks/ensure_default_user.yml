@@ -17,6 +17,7 @@
     uid: 1000
     state: present
     create_home: true
+    shell: "{{ user_mgmt_shell }}"
   when:
     - _uid_1000_check.rc != 0
     - _user_check.rc != 0

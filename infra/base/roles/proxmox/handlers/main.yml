@@ -26,12 +26,6 @@
     name: pveproxy
     state: restarted
 
-- name: Reload systemd and restart rpcbind
-  ansible.builtin.systemd:
-    daemon_reload: yes
-    name: rpcbind
-    state: restarted
-
 - name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: yes

@@ -31,28 +31,11 @@
     name: os-prober
     state: absent
 
-- name: Configure rpcbind to listen only on localhost
-  ansible.builtin.lineinfile:
-    path: /etc/default/rpcbind
-    regexp: '^OPTIONS='
-    line: 'OPTIONS="-h 127.0.0.1 -h ::1"'
-    create: yes
-
-- name: Ensure override directory exists
-  ansible.builtin.file:
-    path: /etc/systemd/system/rpcbind.socket.d
-    state: directory
-    mode: '0755'
-
-- name: Override rpcbind.socket to listen only on localhost
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/rpcbind.socket.d/override.conf
-    content: |
-      [Socket]
-      ListenStream=127.0.0.1:111
-      ListenDatagram=127.0.0.1:111
-  notify: Reload systemd and restart rpcbind
-
+# rpcbind (portmapper) is only needed for NFS, which these hosts don't use.
+# Mask it outright rather than binding it to localhost — a masked unit can't
+# be started, so the localhost-only override that used to live here was both
+# redundant and buggy (its restart handler ran after the mask tasks below and
+# failed with "Unit rpcbind.service is masked").
 - name: Stop and mask rpcbind socket
   ansible.builtin.systemd:
     name: rpcbind.socket

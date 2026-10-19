@@ -13,6 +13,11 @@
     insertafter: EOF
     state: present
 
+- name: "Resolve WAN interface address (port-forward DNAT match)"
+  ansible.builtin.set_fact:
+    _proxmox_wan_addr: "{{ ansible_facts[proxmox_wan_iface]['ipv4']['address'] }}"
+  when: proxmox_port_forwards | default([]) | length > 0
+
 - name: "NAT masquerading for {{ proxmox_lan_cidr }} via {{ proxmox_wan_iface }} (wan interface)"
   ansible.builtin.copy:
     dest: /etc/nftables.d/nat.nft
@@ -22,18 +27,27 @@
         chain postrouting {
           type nat hook postrouting priority srcnat;
           oifname "{{ proxmox_wan_iface }}" ip saddr {{ proxmox_lan_cidr }} masquerade;
+      {% if proxmox_port_forwards | default([]) | length > 0 %}
+          # Hairpin for the port forwards below: an internal client reaching
+          # this host's public IP gets DNAT'd back out the SAME LAN bridge (a
+          # U-turn). Masquerade only that in==out==bridge case so the reply
+          # returns via this host. WAN client traffic enters on the WAN
+          # interface (never in==out==bridge), so its real source IP is
+          # preserved by the pure DNAT below.
+          iifname "{{ proxmox_lan_bridge }}" oifname "{{ proxmox_lan_bridge }}" masquerade;
+      {% endif %}
         }
       {% if proxmox_port_forwards | default([]) | length > 0 %}
-        # Inbound port forwards (DNAT) from the WAN interface to a VM. Pure
-        # DNAT, no SNAT: the VM sees the real client source IP, and replies
-        # return via its gateway (this host), where conntrack reverses the
-        # DNAT. The postrouting masquerade above only matches VM-initiated
-        # egress (saddr {{ proxmox_lan_cidr }}), so it never touches these
-        # inbound flows.
+        # Inbound port forwards (DNAT) to a VM, matched by destination =
+        # this host's WAN address. That matches both external clients (via
+        # the WAN interface) and the internal hairpin (via the LAN bridge),
+        # but never VM-to-internet traffic on the same port (different dst).
+        # The WAN path is pure DNAT so the VM sees the real client IP; the
+        # hairpin path is SNAT'd by the masquerade above.
         chain prerouting {
           type nat hook prerouting priority dstnat;
       {% for f in proxmox_port_forwards %}
-          iifname "{{ proxmox_wan_iface }}" {{ f.proto }} dport {{ f.dport }} dnat to {{ f.to }}{{ (':' ~ (f.to_port | string)) if f.to_port is defined else '' }};
+          ip daddr {{ _proxmox_wan_addr }} {{ f.proto }} dport {{ f.dport }} dnat to {{ f.to }}{{ (':' ~ (f.to_port | string)) if f.to_port is defined else '' }};
       {% endfor %}
         }
       {% endif %}

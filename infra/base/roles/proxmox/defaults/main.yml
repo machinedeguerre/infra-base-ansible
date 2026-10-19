@@ -21,10 +21,14 @@ proxmox_wan_is_wireguard: false
 proxmox_dhcp_range_start: ""  # e.g. "172.25.1.100"
 proxmox_dhcp_range_end: ""  # e.g. "172.25.1.200"
 
-# Inbound port forwards (DNAT) from the WAN interface to a VM on the LAN
-# bridge. Pure DNAT (no SNAT), so the VM sees the real client source IP;
-# replies return via the VM's gateway (this host) where conntrack reverses
-# the DNAT. Use e.g. to publish a VM's k3s ingress on the host's public IP.
+# Inbound port forwards (DNAT) to a VM on the LAN bridge, matched by
+# destination = this host's WAN address. External clients reach them via the
+# WAN interface with their real source IP preserved (pure DNAT, no SNAT).
+# Internal clients hitting the same public IP are handled too (hairpin):
+# the DNAT sends them back out the LAN bridge and a scoped masquerade makes
+# the U-turn return correctly — so e.g. cert-manager's own HTTP-01 self-check
+# works without split-horizon DNS. Only that internal hairpin path is SNAT'd;
+# external client IPs are never touched.
 # Each item: proto (tcp|udp), dport (int, the WAN-side port), to (VM IP),
 #   optional to_port (defaults to dport).
 # Example:

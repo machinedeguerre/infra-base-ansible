@@ -21,6 +21,18 @@ proxmox_wan_is_wireguard: false
 proxmox_dhcp_range_start: ""  # e.g. "172.25.1.100"
 proxmox_dhcp_range_end: ""  # e.g. "172.25.1.200"
 
+# Inbound port forwards (DNAT) from the WAN interface to a VM on the LAN
+# bridge. Pure DNAT (no SNAT), so the VM sees the real client source IP;
+# replies return via the VM's gateway (this host) where conntrack reverses
+# the DNAT. Use e.g. to publish a VM's k3s ingress on the host's public IP.
+# Each item: proto (tcp|udp), dport (int, the WAN-side port), to (VM IP),
+#   optional to_port (defaults to dport).
+# Example:
+#   proxmox_port_forwards:
+#     - { proto: tcp, dport: 80,  to: "172.25.1.10" }
+#     - { proto: tcp, dport: 443, to: "172.25.1.10" }
+proxmox_port_forwards: []
+
 # Nebula routing (for direct routing between Nebula VPN and VM subnet)
 proxmox_nebula_network: "172.24.0.0/16"  # Nebula overlay CIDR (override to match your CA)
 # Note: VM subnet is proxmox_lan_cidr (e.g. "172.25.1.0/24")

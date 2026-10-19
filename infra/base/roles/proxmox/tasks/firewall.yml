@@ -23,6 +23,20 @@
           type nat hook postrouting priority srcnat;
           oifname "{{ proxmox_wan_iface }}" ip saddr {{ proxmox_lan_cidr }} masquerade;
         }
+      {% if proxmox_port_forwards | default([]) | length > 0 %}
+        # Inbound port forwards (DNAT) from the WAN interface to a VM. Pure
+        # DNAT, no SNAT: the VM sees the real client source IP, and replies
+        # return via its gateway (this host), where conntrack reverses the
+        # DNAT. The postrouting masquerade above only matches VM-initiated
+        # egress (saddr {{ proxmox_lan_cidr }}), so it never touches these
+        # inbound flows.
+        chain prerouting {
+          type nat hook prerouting priority dstnat;
+      {% for f in proxmox_port_forwards %}
+          iifname "{{ proxmox_wan_iface }}" {{ f.proto }} dport {{ f.dport }} dnat to {{ f.to }}{{ (':' ~ (f.to_port | string)) if f.to_port is defined else '' }};
+      {% endfor %}
+        }
+      {% endif %}
       }
 
       # Clamp MSS on all forwarded TCP SYN packets to 1260.

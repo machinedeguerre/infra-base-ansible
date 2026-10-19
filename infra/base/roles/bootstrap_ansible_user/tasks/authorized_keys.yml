@@ -28,20 +28,16 @@
   ansible.builtin.set_fact:
     _bootstrap_authorized_keys: >-
       {{
-        (
-          (_bootstrap_default_keys_raw ~ '\n' ~ _bootstrap_extra_keys_raw)
-          .splitlines()
-          | map('trim')
-          | reject('equalto', '')
-          | reject('match', '^#')
-          | list
-        )
+        (_bootstrap_default_keys_raw.splitlines() + _bootstrap_extra_keys_raw.splitlines())
+        | map('trim')
+        | reject('equalto', '')
+        | reject('match', '^#')
+        | list
       }}
 
 - name: Ensure authorized_keys are installed for ansible user
   ansible.builtin.authorized_key:
     user: "{{ bootstrap_ansible_user_name }}"
-    key: "{{ item }}"
+    key: "{{ _bootstrap_authorized_keys | join('\n') }}"
     state: present
     exclusive: "{{ bootstrap_authorized_keys_exclusive | bool }}"
-  loop: "{{ _bootstrap_authorized_keys }}"

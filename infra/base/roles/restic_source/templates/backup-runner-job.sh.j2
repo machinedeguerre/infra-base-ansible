@@ -12,6 +12,17 @@ set -eu
 
 export RESTIC_PASSWORD_FILE=/etc/restic/password
 
+# "list" prints the declared job names, one per line, and exits — used by
+# run-backup.sh --all to discover what to pull. It touches neither the
+# tunnel nor the repository, so it is handled before the per-session
+# credential is required. The name is reserved (validated by the role).
+if [ "${1:-}" = "list" ]; then
+{% for job in backup_jobs %}
+  echo "{{ job.name }}"
+{% endfor %}
+  exit 0
+fi
+
 IFS= read -r _session_pass || _session_pass=""
 if [ -z "$_session_pass" ]; then
   echo "ERROR: no session credential on stdin (first line) - is run-backup.sh current?" >&2

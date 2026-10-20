@@ -19,6 +19,8 @@
       - backup_jobs | selectattr('name', 'defined') | list | length == backup_jobs | length
       - backup_jobs | map(attribute='name') | select('match', '^[a-z0-9-]+$') | list | length == backup_jobs | length
       - backup_jobs | map(attribute='name') | unique | length == backup_jobs | length
+      # "list" is the job-discovery query in the forced command, not a job
+      - "'list' not in (backup_jobs | map(attribute='name'))"
       - backup_jobs | selectattr('paths', 'defined') | list | length == backup_jobs | length
       - _restic_source_pubkeys | length > 0
       - _restic_source_pubkeys | select('match', '^(ssh-|ecdsa-|sk-)') | list | length == _restic_source_pubkeys | length

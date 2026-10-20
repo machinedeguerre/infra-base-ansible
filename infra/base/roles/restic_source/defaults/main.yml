@@ -28,8 +28,10 @@
 # (and your GPG key) is the authoritative copy.
 
 # Declared backup jobs. The backup node selects one by name per session.
-# Each item: name (^[a-z0-9-]+$, becomes the repo name on the backup node),
-# paths (list), exclude (optional list).
+# Each item: name (^[a-z0-9-]+$, becomes the repo name on the backup node;
+# "list" is reserved for the job-discovery query), paths (list), exclude
+# (optional list). Keep names globally unique ACROSS hosts too — the backup
+# node keys its repos by job name alone.
 # Example:
 # backup_jobs:
 #   - name: forgejo

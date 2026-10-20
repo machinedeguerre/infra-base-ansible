@@ -32,7 +32,11 @@
 # controller, jinja-templated) is deployed to the cluster's FIRST server's
 # /var/lib/rancher/k3s/server/manifests/ as ansible-<name>. k3s applies and
 # keeps them in sync automatically; removing a file from the source dir
-# removes it from the node, and k3s then deletes the resources (prune).
+# EMPTIES the deployed copy on the node (timestamped tombstone) — k3s then
+# applies the empty set and deletes the resources. Never delete such a file
+# by hand: k3s ignores file deletion and would leave the resources running.
+# A later run removes the file and its Addon object automatically, once the
+# Addon checksum proves k3s applied exactly that tombstone.
 #
 # Helm works through the same directory via k3s' built-in helm-controller —
 # no helm binary needed anywhere. Example manifest:
@@ -107,10 +111,13 @@ kubernetes_manifests_src: "files/k3s-manifests/{{ kubernetes_cluster }}"
 # Generic vault-backed kubernetes Secrets: a dict keyed
 # "<namespace>/<secret-name>" of data-key -> value, rendered as Opaque
 # Secrets through the manifests mechanism above (as ansible-vault-secrets.yml
-# on the first server; emptying the dict prunes it and k3s deletes the
-# Secrets). Never set this in plaintext — it lives vault-encrypted in
+# on the first server — always deployed; with nothing declared it renders
+# empty and k3s deletes every Secret it created). Never set this in
+# plaintext — it lives vault-encrypted in
 # inventory/group_vars/k3s_<cluster>/kubernetes_secrets.vault.yml, managed
-# with `./infratool kubernetes_secret set|get|list|delete|check <cluster> ...`.
+# with `./infratool kubernetes_secret set|get|copy|move|list|delete|check ...`.
+# The vault holds concrete entries only — replication into other namespaces
+# is declared in checked-in yml via kubernetes_secret_references below.
 # Namespaces are NOT created here (deliberately: pruning this manifest must
 # never delete a namespace) — the namespace is owned by the app's manifest,
 # and k3s' deploy controller retries the Secret every 15s until it exists.
@@ -132,6 +139,20 @@ kubernetes_secrets: {}
 #     "forgejo/webhook-extras": [slack_url]
 kubernetes_required_secrets: {}
 kubernetes_optional_secrets: {}
+
+# Secret replication, declared in the same checked-in file: each entry
+# "<ns>/<name>": "<target-ns>/<target-name>" renders a full copy of the
+# target vault secret as a Secret in the referencing namespace. Where a
+# secret is replicated is configuration, not a secret — it lives here, in
+# plain yml, never in the vault. A reference must point at a concrete vault
+# entry: dangling targets, reference chains, and a reference name colliding
+# with a vault entry all fail the run before any manifest is deployed.
+# A required/optional declaration on a reference name is satisfied by the
+# target's keys.
+# Example:
+#   kubernetes_secret_references:
+#     "forgejo/smtp-auth": mail/smtp-auth
+kubernetes_secret_references: {}
 
 # Where the cluster admin kubeconfig is fetched on the control node: a
 # PROJECT-LOCAL file per cluster, deliberately not ~/.kube/config — kubectl

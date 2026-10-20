@@ -1,23 +1,55 @@
 ---
 # Declarative manifests via k3s' own manifests directory: files placed there
-# are applied and kept in sync by the AddonsController, and deleting a file
-# deletes the corresponding resources. Our files are prefixed ansible- so the
-# prune below never touches k3s' bundled addons (traefik, coredns, ...).
+# are applied and kept in sync by the AddonsController. k3s IGNORES file
+# deletion ("Deleting files out of this directory will not delete the
+# corresponding resources from the cluster"), so undeclared files are never
+# removed — they are EMPTIED instead: k3s applies the empty set and deletes
+# every resource the file created, and the emptied file stays behind as a
+# tombstone. Our files are prefixed ansible- so the tombstoning below never
+# touches k3s' bundled addons (traefik, coredns, ...).
+
+# kubernetes_secret_references (checked-in yml) replicates vault secrets
+# into other namespaces: "<ns>/<name>": "<target-ns>/<target-name>". Every
+# reference must point at a concrete vault entry — dangling targets,
+# reference chains and names colliding with vault entries fail here, before
+# anything is deployed.
+- name: Secret references must point at concrete secrets in the vault
+  ansible.builtin.assert:
+    that:
+      - item.key not in kubernetes_secrets
+      - item.value not in kubernetes_secret_references
+      - item.value in kubernetes_secrets
+    fail_msg: >-
+      kubernetes_secret_references entry {{ item.key }} -> {{ item.value }}
+      is invalid: {{ 'the reference name collides with a concrete vault
+      entry — remove one of them' if item.key in kubernetes_secrets
+      else ('the target is itself a reference — references must point at a
+      concrete vault secret' if item.value in kubernetes_secret_references
+      else 'the target does not exist in the vault') }}.
+  loop: "{{ kubernetes_secret_references | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} -> {{ item.value }}"
 
 # Fail before anything is deployed when a required secret (the checked-in
 # contract, kubernetes_required_secrets) is missing from the vault
 # (kubernetes_secrets): a Secret that never materializes would otherwise
 # fail silently in k3s' deploy controller every 15s, visible only in
 # cluster events. The loop asserts every pair so one run lists all gaps.
+# References count as their target's keys (validated as sound above).
 - name: Every required kubernetes Secret must exist in the vault
   ansible.builtin.assert:
     that:
-      - item.1 in (kubernetes_secrets[item.0.key] | default({}))
+      - item.1 in _kubernetes_entry
     fail_msg: >-
       Required kubernetes Secret missing in vault:
       {{ item.0.key }} key '{{ item.1 }}' — set it with
       `./infratool kubernetes_secret set {{ kubernetes_cluster }}
       {{ item.0.key.split('/', 1) | join(' ') }} {{ item.1 }}`.
+  vars:
+    _kubernetes_entry: >-
+      {{ (kubernetes_secrets[kubernetes_secret_references[item.0.key]] | default({}))
+         if item.0.key in kubernetes_secret_references
+         else (kubernetes_secrets[item.0.key] | default({})) }}
   loop: "{{ kubernetes_required_secrets | dict2items | subelements('value') }}"
   loop_control:
     label: "{{ item.0.key }} key '{{ item.1 }}'"
@@ -52,10 +84,11 @@
   loop_control:
     label: "{{ item | basename }}"
 
-# Vault-backed Secrets (kubernetes_secrets) render into one generated
-# manifest through the same mechanism. no_log/diff off: the rendered file
-# contains every secret value. When the dict is empty the file is pruned
-# below and k3s deletes the Secrets from the cluster.
+# Vault-backed Secrets (kubernetes_secrets + kubernetes_secret_references)
+# render into one generated manifest through the same mechanism. ALWAYS
+# deployed: with nothing declared it renders empty (comments only), and
+# k3s' apply of the empty set deletes every Secret it created. no_log/diff
+# off: the rendered file contains every secret value.
 - name: Deploy vault-backed Secrets manifest
   ansible.builtin.template:
     src: vault_secrets.yml.j2
@@ -65,7 +98,6 @@
     mode: "0600"
   no_log: true
   diff: false
-  when: kubernetes_secrets | length > 0
 
 - name: List deployed manifests
   ansible.builtin.find:
@@ -73,16 +105,50 @@
     patterns: "ansible-*"
   register: _kubernetes_deployed
 
-- name: Prune manifests no longer declared (k3s deletes their resources)
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
-  loop: "{{ _kubernetes_deployed.files }}"
-  loop_control:
-    label: "{{ item.path | basename }}"
-  when: >-
-    (item.path | basename) not in
-    ((_kubernetes_manifest_files | map('basename')
-      | map('regex_replace', '^', 'ansible-') | list)
-     + (['ansible-vault-secrets.yml'] if kubernetes_secrets | length > 0
-        else []))
+# Never delete an undeclared manifest outright — k3s ignores file deletion
+# and would leave the resources running. Two-phase prune instead:
+#   1. First run: EMPTY the file (timestamped tombstone, so its sha256 is
+#      unique to this exact write). k3s applies the empty set within ~15s
+#      and deletes everything the file created.
+#   2. Later runs: once the Addon's spec.checksum (updated only on a
+#      successful apply) equals the tombstone's sha256 — proof k3s applied
+#      exactly this file — remove the file and the Addon object.
+# A missing Addon means k3s tracks nothing for the file: remove it too.
+# File content is never printed (a not-yet-tombstoned file holds the real
+# manifest, secrets included).
+- name: Prune manifests no longer declared (empty, verify, then remove)
+  ansible.builtin.shell: |
+    set -eu
+    f="/var/lib/rancher/k3s/server/manifests/{{ item }}"
+    if ! head -n 1 "$f" | grep -q '^# ANSIBLE TOMBSTONE'; then
+      umask 077
+      cat > "$f" <<EOF
+    # ANSIBLE TOMBSTONE (infra.base.kubernetes), emptied at $(date -u +%Y-%m-%dT%H:%M:%SZ).
+    # This manifest is no longer declared. k3s ignores file deletion, so the
+    # file was emptied instead: k3s applies the empty set and deletes the
+    # resources it created. Once the Addon checksum confirms this exact file
+    # was applied, a later ansible run removes the file and the Addon.
+    EOF
+      echo TOMBSTONED
+      exit 0
+    fi
+    name="{{ item.split('.')[0] }}"
+    sum="$(sha256sum "$f" | cut -d' ' -f1)"
+    applied="$(k3s kubectl get addon -n kube-system "$name" \
+      -o jsonpath='{.spec.checksum}' 2>/dev/null || echo MISSING)"
+    if [ "$applied" = "$sum" ] || [ "$applied" = "MISSING" ]; then
+      rm "$f"
+      k3s kubectl delete addon -n kube-system "$name" --ignore-not-found >/dev/null
+      echo REMOVED
+    else
+      echo WAITING
+    fi
+  register: _kubernetes_prune
+  changed_when: _kubernetes_prune.stdout != 'WAITING'
+  loop: >-
+    {{ _kubernetes_deployed.files | map(attribute='path')
+       | map('basename')
+       | reject('in', (_kubernetes_manifest_files | map('basename')
+                       | map('regex_replace', '^', 'ansible-') | list)
+                      + ['ansible-vault-secrets.yml'])
+       | list }}

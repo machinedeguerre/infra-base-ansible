@@ -39,10 +39,12 @@ haproxy_sites: []
 wildcard_certs: {}
 
 # Raw TCP port forwards (mode tcp). Each entry needs:
-#   - name:          internal identifier (used for frontend/backend names)
-#   - listen_port:   port to bind on this host
-#   - upstream_host: address to forward to
-#   - upstream_port: port on the upstream host
+#   - name:           internal identifier (used for frontend/backend names)
+#   - listen_port:    port to bind on this host
+#   - upstream_host:  address to forward to
+#   - upstream_port:  port on the upstream host
+#   - listen_address: optional bind address (default "*", all interfaces) —
+#                     use to pin a forward to one network leg
 #
 # Example (expose SSH on port 2222, forwarded to 192.0.2.10:22):
 # haproxy_tcp_forwards:

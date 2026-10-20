@@ -4,6 +4,24 @@
 # deletes the corresponding resources. Our files are prefixed ansible- so the
 # prune below never touches k3s' bundled addons (traefik, coredns, ...).
 
+# Fail before anything is deployed when a required secret (the checked-in
+# contract, kubernetes_required_secrets) is missing from the vault
+# (kubernetes_secrets): a Secret that never materializes would otherwise
+# fail silently in k3s' deploy controller every 15s, visible only in
+# cluster events. The loop asserts every pair so one run lists all gaps.
+- name: Every required kubernetes Secret must exist in the vault
+  ansible.builtin.assert:
+    that:
+      - item.1 in (kubernetes_secrets[item.0.key] | default({}))
+    fail_msg: >-
+      Required kubernetes Secret missing in vault:
+      {{ item.0.key }} key '{{ item.1 }}' — set it with
+      `./infratool kubernetes_secret set {{ kubernetes_cluster }}
+      {{ item.0.key.split('/', 1) | join(' ') }} {{ item.1 }}`.
+  loop: "{{ kubernetes_required_secrets | dict2items | subelements('value') }}"
+  loop_control:
+    label: "{{ item.0.key }} key '{{ item.1 }}'"
+
 - name: Wait for the kubernetes API to be ready
   ansible.builtin.command: k3s kubectl get --raw /readyz
   register: _kubernetes_readyz
@@ -34,6 +52,21 @@
   loop_control:
     label: "{{ item | basename }}"
 
+# Vault-backed Secrets (kubernetes_secrets) render into one generated
+# manifest through the same mechanism. no_log/diff off: the rendered file
+# contains every secret value. When the dict is empty the file is pruned
+# below and k3s deletes the Secrets from the cluster.
+- name: Deploy vault-backed Secrets manifest
+  ansible.builtin.template:
+    src: vault_secrets.yml.j2
+    dest: /var/lib/rancher/k3s/server/manifests/ansible-vault-secrets.yml
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+  when: kubernetes_secrets | length > 0
+
 - name: List deployed manifests
   ansible.builtin.find:
     paths: /var/lib/rancher/k3s/server/manifests
@@ -49,5 +82,7 @@
     label: "{{ item.path | basename }}"
   when: >-
     (item.path | basename) not in
-    (_kubernetes_manifest_files | map('basename')
-     | map('regex_replace', '^', 'ansible-') | list)
+    ((_kubernetes_manifest_files | map('basename')
+      | map('regex_replace', '^', 'ansible-') | list)
+     + (['ansible-vault-secrets.yml'] if kubernetes_secrets | length > 0
+        else []))

@@ -51,7 +51,9 @@
 # Secrets: manifest files are jinja-templated, so a kubernetes Secret
 # manifest can reference vault-encrypted ansible variables — secrets live in
 # ansible-vault like everything else. Escape literal {{ }} needed by k8s
-# (rare) with {% raw %} ... {% endraw %}.
+# (rare) with {% raw %} ... {% endraw %}. For plain Opaque Secrets, prefer
+# the generic vault-backed mechanism below (kubernetes_secrets, managed with
+# `./infratool kubernetes_secret`) over hand-written Secret manifests.
 
 # REQUIRED. Cluster name (also the suffix of its inventory groups). Set it in
 # the cluster group's group_vars, e.g. kubernetes_cluster: internal.
@@ -101,6 +103,35 @@ kubernetes_registry_mirrors: {}
 # paths work too). Missing directory simply means no manifests. Manifests
 # are cluster-wide: they are deployed on the cluster's first server only.
 kubernetes_manifests_src: "files/k3s-manifests/{{ kubernetes_cluster }}"
+
+# Generic vault-backed kubernetes Secrets: a dict keyed
+# "<namespace>/<secret-name>" of data-key -> value, rendered as Opaque
+# Secrets through the manifests mechanism above (as ansible-vault-secrets.yml
+# on the first server; emptying the dict prunes it and k3s deletes the
+# Secrets). Never set this in plaintext — it lives vault-encrypted in
+# inventory/group_vars/k3s_<cluster>/kubernetes_secrets.vault.yml, managed
+# with `./infratool kubernetes_secret set|get|list|delete|check <cluster> ...`.
+# Namespaces are NOT created here (deliberately: pruning this manifest must
+# never delete a namespace) — the namespace is owned by the app's manifest,
+# and k3s' deploy controller retries the Secret every 15s until it exists.
+kubernetes_secrets: {}
+
+# Checked-in contract for kubernetes_secrets (names and keys only, never
+# values), set per cluster in
+# inventory/group_vars/k3s_<cluster>/kubernetes_secrets_declared.yml.
+# required: every listed key MUST exist in the vault — validated before
+#   manifest deploy, missing entries are a hard error naming the infratool
+#   command to run.
+# optional: keys that MAY exist. Vault entries declared in neither are
+#   flagged in the Reports step (playbooks/report.yml -> tasks_from:
+#   secrets_report) as stale, with a ready-made delete command.
+# Example:
+#   kubernetes_required_secrets:
+#     "forgejo/smtp-credentials": [username, password]
+#   kubernetes_optional_secrets:
+#     "forgejo/webhook-extras": [slack_url]
+kubernetes_required_secrets: {}
+kubernetes_optional_secrets: {}
 
 # Where the cluster admin kubeconfig is fetched on the control node: a
 # PROJECT-LOCAL file per cluster, deliberately not ~/.kube/config — kubectl

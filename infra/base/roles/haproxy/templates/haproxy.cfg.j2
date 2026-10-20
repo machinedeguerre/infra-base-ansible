@@ -96,7 +96,7 @@ backend be_{{ site.name }}
 {% for fwd in haproxy_tcp_forwards %}
 frontend tcp_{{ fwd.name }}_in
     mode tcp
-    bind *:{{ fwd.listen_port }}
+    bind {{ fwd.listen_address | default('*') }}:{{ fwd.listen_port }}
     option tcplog
     timeout client 1h
     default_backend tcp_be_{{ fwd.name }}

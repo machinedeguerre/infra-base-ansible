@@ -178,7 +178,7 @@ kubernetes_smtp_relay_namespace: "mail"
 # gated by SASL auth, and the upstream provider enforces its own policy.
 kubernetes_smtp_relay_sender_domains: []
 # Pinned image; bumping it is a deliberate decision.
-kubernetes_smtp_relay_image: "ghcr.io/bokysan/postfix:v5.1.0"
+kubernetes_smtp_relay_image: "docker.io/boky/postfix:v5.1.0"
 
 # Secret replication, declared in the same checked-in file: each entry
 # "<ns>/<name>": "<target-ns>/<target-name>" renders a full copy of the

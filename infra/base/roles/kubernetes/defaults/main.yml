@@ -132,13 +132,53 @@ kubernetes_secrets: {}
 # optional: keys that MAY exist. Vault entries declared in neither are
 #   flagged in the Reports step (playbooks/report.yml -> tasks_from:
 #   secrets_report) as stale, with a ready-made delete command.
+# generated: exactly like required, but the value is machine-generated with
+#   `./infratool kubernetes_secret generate ...` (random, never typed or
+#   seen by a human) — used for pure machine-to-machine credentials.
 # Example:
 #   kubernetes_required_secrets:
 #     "forgejo/smtp-credentials": [username, password]
+#   kubernetes_generated_secrets:
+#     "appns/internal-api": [token]
 #   kubernetes_optional_secrets:
 #     "forgejo/webhook-extras": [slack_url]
 kubernetes_required_secrets: {}
+kubernetes_generated_secrets: {}
 kubernetes_optional_secrets: {}
+
+# --- smtp-relay component ----------------------------------------------------
+# In-cluster SMTP relay (postfix via boky/postfix), deployed through the
+# manifests mechanism as ansible-smtp-relay.yml. THE SWITCH is the client
+# list: a non-empty list enables the component, emptying it again makes the
+# tombstone prune delete the whole thing (including its namespace, which the
+# component owns). For each client namespace <c> in the list:
+#   - the vault must hold "<relay-ns>/smtp-auth-<c>" key password, created
+#     with `./infratool kubernetes_secret generate <cluster> <relay-ns>
+#     smtp-auth-<c> password` (validated before deploy, like any required
+#     secret);
+#   - a Secret "smtp" is rendered in <c>'s OWN namespace (and nowhere else)
+#     with server/port/username/password; the username is mail@<c>.
+# The relay itself requires "<relay-ns>/smtp-upstream" key url, an SMTP URL:
+#   smtp://user:pass@host:587 (STARTTLS) or smtps://user:pass@host:465
+#   (implicit TLS); user/pass URL-encoded if they contain reserved chars —
+#   NOTE: decoding is form-style, so a literal '+' must be written %2B
+#   (a bare '+' becomes a space).
+# The relay Service (ClusterIP only) answers on ports 587 and 25 — the same
+# authenticated plaintext listener; port 465 deliberately unsupported (it
+# means implicit TLS, which needs a real server certificate).
+# The derived vault requirements are part of the effective secrets contract
+# (vars/main.yml), which `./infratool kubernetes_secret check` fetches via
+# the secrets_contract entrypoint — the tool itself knows nothing about
+# components.
+kubernetes_smtp_relay_clients: []
+# The relay's own namespace (pod + service). Rarely changed.
+kubernetes_smtp_relay_namespace: "mail"
+# Optional sender-domain restriction (ALLOWED_SENDER_DOMAINS). Empty list
+# (default) = unrestricted (ALLOW_EMPTY_SENDER_DOMAINS): relaying is already
+# gated by SASL auth, and the upstream provider enforces its own policy.
+kubernetes_smtp_relay_sender_domains: []
+# Pinned image; bumping it is a deliberate decision.
+kubernetes_smtp_relay_image: "ghcr.io/bokysan/postfix:v5.1.0"
 
 # Secret replication, declared in the same checked-in file: each entry
 # "<ns>/<name>": "<target-ns>/<target-name>" renders a full copy of the

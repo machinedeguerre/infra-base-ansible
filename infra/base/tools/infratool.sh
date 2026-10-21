@@ -5,6 +5,14 @@ export COLLECTION_ROOT="${PROJECT_ROOT}/collections/ansible_collections/infra/ba
 export TOOLS_DIR="${COLLECTION_ROOT}/tools"
 export ANSIBLE_VAULT_PASSWORD_FILE="${COLLECTION_ROOT}/scripts/vault_pass_gpg.sh"
 
+export INFRA_VAULT_CACHE_KEY="${INFRA_VAULT_CACHE_KEY:-$(openssl rand -hex 32)}"
+_vault_cache_cleanup() {
+  local key_tag
+  key_tag="$(printf '%s' "$INFRA_VAULT_CACHE_KEY" | sha256sum | cut -c1-16)"
+  rm -f "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/infratool-vault-*-"$key_tag"
+}
+trap _vault_cache_cleanup EXIT
+
 if [ ! -d playbooks ] || [ ! -d inventory ] || [ ! -d $TOOLS_DIR ]; then
   echo "This script is supposed to run in the scope of an ansible project." >&2
   echo "Run it from the root of your ansible project (where the playbooks directory is located)." >&2

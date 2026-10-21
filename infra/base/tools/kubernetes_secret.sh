@@ -22,17 +22,21 @@ set -euo pipefail
 # with a vault entry are hard errors (here and in the ansible run).
 #
 # Usage:
-#   kubernetes_secret set    <cluster> <namespace> <secret> <key> [value|-]
-#   kubernetes_secret get    <cluster> <namespace> <secret> <key>
-#   kubernetes_secret copy   <from-cluster> <from-ns> <from-secret> <from-key> <to-cluster> <to-ns> <to-secret> <to-key>
-#   kubernetes_secret move   <from-cluster> <from-ns> <from-secret> <from-key> <to-cluster> <to-ns> <to-secret> <to-key>
-#   kubernetes_secret list   <cluster>
-#   kubernetes_secret delete <cluster> <namespace> <secret> [key]
-#   kubernetes_secret check  <cluster>
+#   kubernetes_secret set      <cluster> <namespace> <secret> <key> [value|-]
+#   kubernetes_secret generate <cluster> <namespace> <secret> <key>
+#   kubernetes_secret get      <cluster> <namespace> <secret> <key>
+#   kubernetes_secret copy     <from-cluster> <from-ns> <from-secret> <from-key> <to-cluster> <to-ns> <to-secret> <to-key>
+#   kubernetes_secret move     <from-cluster> <from-ns> <from-secret> <from-key> <to-cluster> <to-ns> <to-secret> <to-key>
+#   kubernetes_secret list     <cluster>
+#   kubernetes_secret delete   <cluster> <namespace> <secret> [key]
+#   kubernetes_secret check    <cluster>
 #
 # `set` without a value prompts twice with hidden input (preferred: nothing
 # lands in shell history); `-` reads the value verbatim from stdin (e.g. a
 # PEM file). Values are text — binary data is not supported.
+# `generate` is `set` with a random value (~192 bits), for machine-only
+# secrets no human ever needs to type; it refuses to overwrite an existing
+# key (rotation = deliberate delete first).
 # `get` resolves references transparently; `list` shows them alongside the
 # vault entries. `delete` removes one key, or the whole secret when key is
 # omitted; a secret still pointed at by a reference cannot be deleted.
@@ -40,8 +44,11 @@ set -euo pipefail
 # clusters must be in this project); `move` is copy + delete of the source
 # key, with the same guards as delete. Neither overwrites an existing
 # destination key — delete it first if you really mean to replace it.
-# `check` compares the contract against the vault both ways (references
-# resolved) and validates the references; exits non-zero on any problem.
+# `check` validates the EFFECTIVE contract against the vault both ways:
+# it fetches contract + vault structure (names only) through the kubernetes
+# role's secrets_contract entrypoint, so requirements derived by enabled
+# role components are included — this tool itself knows nothing about them.
+# Exits non-zero on any problem. No host connections are made.
 
 usage() {
   sed -n 's/^#   kubernetes_secret /  kubernetes_secret /p' "$0" >&2
@@ -103,15 +110,17 @@ umask 077
 TMP_PLAIN="$(mktemp)"
 TMP_VALUE="$(mktemp)"
 TMP_DST="$(mktemp)"
+TMP_CONTRACT="$(mktemp)"
 cleanup() {
-  shred -u "$TMP_PLAIN" "$TMP_VALUE" "$TMP_DST" 2>/dev/null \
-    || rm -f "$TMP_PLAIN" "$TMP_VALUE" "$TMP_DST"
+  shred -u "$TMP_PLAIN" "$TMP_VALUE" "$TMP_DST" "$TMP_CONTRACT" 2>/dev/null \
+    || rm -f "$TMP_PLAIN" "$TMP_VALUE" "$TMP_DST" "$TMP_CONTRACT"
 }
 trap cleanup EXIT
 
 # Decrypt the current vault contents (empty file when the vault does not
 # exist yet) — all YAML work happens on the plaintext in python below.
-if [ -f "$VAULT_FILE" ]; then
+# `check` never needs it: it works from the effective contract instead.
+if [ "$ACTION" != "check" ] && [ -f "$VAULT_FILE" ]; then
   ansible-vault view "$VAULT_FILE" > "$TMP_PLAIN"
 fi
 
@@ -124,6 +133,7 @@ run_py() {
   KS_DECLARED="$DECLARED_FILE" KS_CLUSTER="$CLUSTER" \
     python3 - "$@" <<'PY'
 import os, sys, yaml
+from secrets import token_urlsafe
 
 op = sys.argv[1]
 args = sys.argv[2:]
@@ -161,19 +171,30 @@ def save_secrets(secrets, path=None, cluster_name=None):
                        width=1000000, sort_keys=True)
 
 def load_declared(path=None):
+    # Four generic contract categories, nothing else:
+    #   required  — must exist in the vault (created with `set`)
+    #   generated — must exist in the vault, machine-generated (`generate`)
+    #   optional  — may exist
+    #   references — replicate another entry into a namespace
     path = path or declared_path
-    required, optional, references = {}, {}, {}
+    required, generated, optional, references = {}, {}, {}, {}
     if os.path.exists(path):
         with open(path) as f:
             data = yaml.safe_load(f) or {}
         required = data.get("kubernetes_required_secrets") or {}
+        generated = data.get("kubernetes_generated_secrets") or {}
         optional = data.get("kubernetes_optional_secrets") or {}
         references = data.get("kubernetes_secret_references") or {}
-    return required, optional, references
+    return required, generated, optional, references
 
 def declared_keys(ref):
-    required, optional, _ = load_declared()
-    return set(required.get(ref) or []) | set(optional.get(ref) or [])
+    required, generated, optional, _ = load_declared()
+    return (set(required.get(ref) or []) | set(generated.get(ref) or [])
+            | set(optional.get(ref) or []))
+
+def required_keys(ref, required, generated):
+    # generated entries are required too — they just carry a different verb.
+    return set(required.get(ref) or []) | set(generated.get(ref) or [])
 
 # References live in the checked-in declared file, never in the vault:
 # "<ns>/<name>" -> "<target-ns>/<target-name>" replicates the target's data
@@ -189,7 +210,7 @@ def referrers(references, target):
     return sorted(k for k, v in references.items() if v == target)
 
 secrets = load_secrets()
-_, _, references = load_declared()
+_, _, _, references = load_declared()
 
 if op == "set":
     ns, name, key = args
@@ -210,6 +231,25 @@ if op == "set":
                  "set the key on the target instead, or remove the reference")
     secrets.setdefault(ref, {})[key] = value
     save_secrets(secrets)
+    if key not in declared_keys(ref):
+        print(f"WARNING: {ref} key '{key}' is not declared — add it to "
+              f"{os.path.relpath(declared_path)} (required or optional), or "
+              "the Reports step will flag it as stale.", file=sys.stderr)
+
+elif op == "generate":
+    ns, name, key = args
+    ref = f"{ns}/{name}"
+    if ref in references:
+        sys.exit(f"ERROR: {ref} is declared as a reference to "
+                 f"{references[ref]} in {os.path.relpath(declared_path)} — "
+                 "generate on the target instead, or remove the reference")
+    if key in secrets.get(ref, {}):
+        sys.exit(f"ERROR: {ref} key '{key}' already exists — a generated "
+                 "secret is never rotated by accident; delete it first if "
+                 "you really mean it")
+    secrets.setdefault(ref, {})[key] = token_urlsafe(24)
+    save_secrets(secrets)
+    print(f"Generated random value for {ref} key '{key}'")
     if key not in declared_keys(ref):
         print(f"WARNING: {ref} key '{key}' is not declared — add it to "
               f"{os.path.relpath(declared_path)} (required or optional), or "
@@ -243,7 +283,7 @@ elif op in ("copy", "move"):
         dst_references = references
     else:
         dst_secrets = load_secrets(os.environ["KS_PLAIN_DST"])
-        _, _, dst_references = load_declared(dst_declared_path)
+        _, _, _, dst_references = load_declared(dst_declared_path)
 
     if same_vault and src == dst and skey == dkey:
         sys.exit("ERROR: source and destination are the same")
@@ -298,14 +338,15 @@ elif op in ("copy", "move"):
     print(f"{verb} {src} key '{skey}' (cluster {cluster}) -> "
           f"{dst} key '{dkey}' (cluster {dst_cluster})")
     if op == "move":
-        required, _, _ = load_declared()
-        if skey in (required.get(src) or []):
+        required, generated, _, _ = load_declared()
+        if skey in required_keys(src, required, generated):
             print(f"WARNING: {src} key '{skey}' is declared REQUIRED in "
                   f"cluster {cluster} — the next ansible run will fail until "
                   "it is set again (or the requirement is removed from "
                   f"{os.path.relpath(declared_path)}).", file=sys.stderr)
-    req_d, opt_d, _ = load_declared(dst_declared_path)
-    if dkey not in (set(req_d.get(dst) or []) | set(opt_d.get(dst) or [])):
+    req_d, gen_d, opt_d, _ = load_declared(dst_declared_path)
+    if dkey not in (set(req_d.get(dst) or []) | set(gen_d.get(dst) or [])
+                    | set(opt_d.get(dst) or [])):
         print(f"WARNING: {dst} key '{dkey}' is not declared — add it to "
               f"{os.path.relpath(dst_declared_path)} (required or optional), "
               "or the Reports step will flag it as stale.", file=sys.stderr)
@@ -328,7 +369,7 @@ elif op == "delete":
                  "(kubernetes_secret_references), not here")
     if ref not in secrets:
         sys.exit(f"ERROR: {ref} not found in the vault")
-    required, _, _ = load_declared()
+    required, generated, _, _ = load_declared()
     # Deleting a secret (or its last key) would leave any reference pointing
     # at it dangling — an invalid state this tool never writes.
     refs_here = referrers(references, ref)
@@ -338,7 +379,7 @@ elif op == "delete":
                      "remove the reference(s) from "
                      f"{os.path.relpath(declared_path)} first")
         removed = sorted(secrets.pop(ref))
-        required_hit = sorted(set(removed) & set(required.get(ref) or []))
+        required_hit = sorted(set(removed) & required_keys(ref, required, generated))
     else:
         if key not in secrets[ref]:
             sys.exit(f"ERROR: {ref} key '{key}' not found in the vault")
@@ -351,7 +392,7 @@ elif op == "delete":
         if not secrets[ref]:
             del secrets[ref]
         removed = [key]
-        required_hit = [key] if key in (required.get(ref) or []) else []
+        required_hit = [key] if key in required_keys(ref, required, generated) else []
     save_secrets(secrets)
     print(f"Deleted {ref} key(s): {', '.join(removed)}")
     if required_hit:
@@ -361,36 +402,55 @@ elif op == "delete":
               f"{os.path.relpath(declared_path)}).", file=sys.stderr)
 
 elif op == "check":
-    required, optional, _ = load_declared()
+    # Everything comes from the EFFECTIVE contract fetched via ansible
+    # (checked-in contract variables merged with component-derived entries,
+    # plus the vault structure — names only). This tool knows nothing about
+    # components or where the variables were defined.
+    import json
+    with open(os.environ["KS_CONTRACT"]) as f:
+        contract = json.load(f)
+    c_required = contract.get("required") or {}
+    c_generated = contract.get("generated") or {}
+    c_optional = contract.get("optional") or {}
+    c_references = contract.get("references") or {}
+    c_vault = contract.get("vault") or {}  # "<ns>/<name>" -> [key, ...]
     problems = 0
-    for ref in sorted(references):
-        target = references[ref]
-        if ref in secrets:
+
+    def vault_keys(ref):
+        target = c_references.get(ref)
+        return set(c_vault.get(target if target is not None else ref) or [])
+
+    for ref in sorted(c_references):
+        target = c_references[ref]
+        if ref in c_vault:
             problems += 1
             print(f"COLLIDING reference: {ref} -> {target}, but {ref} is "
                   "also a concrete vault entry — remove one of them")
-        if target in references:
+        if target in c_references:
             problems += 1
             print(f"INVALID reference: {ref} -> {target}, which is itself a "
-                  f"reference (to {references[target]}) — references must "
+                  f"reference (to {c_references[target]}) — references must "
                   "point at a concrete vault secret")
-        elif target not in secrets:
+        elif target not in c_vault:
             problems += 1
             print(f"BROKEN reference: {ref} -> {target} (target not in the "
                   "vault) — the ansible run will refuse to deploy manifests")
-    for ref in sorted(required):
+    for ref in sorted(set(c_required) | set(c_generated)):
         ns_name = ref.split("/", 1)
-        for key in required[ref] or []:
-            if key not in resolved(secrets, references, ref):
+        keys = set(c_required.get(ref) or []) | set(c_generated.get(ref) or [])
+        for key in sorted(keys):
+            if key not in vault_keys(ref):
                 problems += 1
+                verb = "generate" if key in (c_generated.get(ref) or []) else "set"
                 print(f"MISSING required: {ref} key '{key}'\n"
-                      f"  -> ./infratool kubernetes_secret set {cluster} "
+                      f"  -> ./infratool kubernetes_secret {verb} {cluster} "
                       f"{ns_name[0]} {ns_name[1]} {key}")
-    declared = {ref: set(required.get(ref) or []) | set(optional.get(ref) or [])
-                for ref in set(required) | set(optional)}
-    for ref in sorted(secrets):
+    declared = {ref: set(c_required.get(ref) or []) | set(c_generated.get(ref) or [])
+                     | set(c_optional.get(ref) or [])
+                for ref in set(c_required) | set(c_generated) | set(c_optional)}
+    for ref in sorted(c_vault):
         ns_name = ref.split("/", 1)
-        for key in sorted(secrets[ref]):
+        for key in sorted(c_vault[ref] or []):
             if key in declared.get(ref, set()):
                 continue
             problems += 1
@@ -440,6 +500,12 @@ case "$ACTION" in
       fi
       KS_VALUE="$VALUE" run_py set "$NS" "$NAME" "$KEY"
     fi
+    encrypt_back
+    ;;
+  generate)
+    [ "$#" -eq 5 ] || usage
+    validate_ns_name_key "$3" "$4" "$5"
+    run_py generate "$3" "$4" "$5"
     encrypt_back
     ;;
   get)
@@ -498,7 +564,24 @@ case "$ACTION" in
     ;;
   check)
     [ "$#" -eq 2 ] || usage
-    run_py check
+    require_cmd ansible
+    # Fetch the EFFECTIVE contract (checked-in vars merged with what enabled
+    # role components derive) plus the vault structure (names only) through
+    # the kubernetes role's secrets_contract entrypoint. No host connections
+    # are made; vault decryption happens on the controller — one cached
+    # password fetch for the whole command.
+    if ! ansible "k3s_${CLUSTER}" -m include_role \
+        -a "name=infra.base.kubernetes tasks_from=secrets_contract" \
+        -e "kubernetes_secrets_contract_dest=$TMP_CONTRACT" \
+        -e "ansible_python_interpreter=auto_silent" >/dev/null; then
+      echo "ERROR: Failed to fetch the secrets contract via ansible" >&2
+      exit 1
+    fi
+    if [ ! -s "$TMP_CONTRACT" ]; then
+      echo "ERROR: Got no contract — does inventory group k3s_${CLUSTER} have a server?" >&2
+      exit 1
+    fi
+    KS_CONTRACT="$TMP_CONTRACT" run_py check
     ;;
   *)
     usage

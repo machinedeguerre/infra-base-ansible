@@ -1,0 +1,39 @@
+---
+# Derived component state — role vars so manifests.yml, secrets_report.yml
+# and secrets_contract.yml share one definition. Components are
+# collection-bundled optional manifests (templates in this role), each
+# enabled by its own configuration variables (see defaults). An enabled
+# component deploys as ansible-<name>.yml through the same mechanism as
+# project manifests; disabling it makes the file undeclared, so the
+# tombstone prune removes everything it created.
+
+# Enabled components, as {name, template} entries.
+_kubernetes_components: >-
+  {{ ([{'name': 'smtp-relay', 'template': 'smtp_relay.yml.j2'}]
+      if kubernetes_smtp_relay_clients | length > 0 else []) }}
+
+# Vault entries the enabled components require, split by how a human
+# creates them: required -> `set` (a value from outside), generated ->
+# `generate` (random machine-only value). Both are merged into the
+# required-secrets validation (manifests.yml), treated as declared by the
+# report (secrets_report.yml), and exposed to tooling via
+# secrets_contract.yml — the single place component semantics like
+# "client list implies these vault entries" are expressed.
+_kubernetes_component_required: >-
+  {{ ({ (kubernetes_smtp_relay_namespace ~ '/smtp-upstream'): ['url'] })
+     if kubernetes_smtp_relay_clients | length > 0 else {} }}
+_kubernetes_component_generated: >-
+  {{ (dict(kubernetes_smtp_relay_clients
+           | map('regex_replace', '^',
+                 kubernetes_smtp_relay_namespace ~ '/smtp-auth-')
+           | zip_longest([], fillvalue=['password'])))
+     if kubernetes_smtp_relay_clients | length > 0 else {} }}
+
+# The effective contract: checked-in contract variables merged with the
+# component-derived entries above.
+_kubernetes_effective_required: >-
+  {{ kubernetes_required_secrets
+     | combine(_kubernetes_component_required, list_merge='append_rp') }}
+_kubernetes_effective_generated: >-
+  {{ kubernetes_generated_secrets
+     | combine(_kubernetes_component_generated, list_merge='append_rp') }}

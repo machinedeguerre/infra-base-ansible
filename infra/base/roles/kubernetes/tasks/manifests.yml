@@ -31,26 +31,37 @@
     label: "{{ item.key }} -> {{ item.value }}"
 
 # Fail before anything is deployed when a required secret (the checked-in
-# contract, kubernetes_required_secrets) is missing from the vault
-# (kubernetes_secrets): a Secret that never materializes would otherwise
-# fail silently in k3s' deploy controller every 15s, visible only in
-# cluster events. The loop asserts every pair so one run lists all gaps.
-# References count as their target's keys (validated as sound above).
+# contract, kubernetes_required_secrets, plus what enabled components derive
+# — see vars/main.yml) is missing from the vault (kubernetes_secrets): a
+# Secret that never materializes would otherwise fail silently in k3s'
+# deploy controller every 15s, visible only in cluster events. The loop
+# asserts every pair so one run lists all gaps. References count as their
+# target's keys (validated as sound above).
 - name: Every required kubernetes Secret must exist in the vault
   ansible.builtin.assert:
     that:
       - item.1 in _kubernetes_entry
     fail_msg: >-
       Required kubernetes Secret missing in vault:
-      {{ item.0.key }} key '{{ item.1 }}' — set it with
-      `./infratool kubernetes_secret set {{ kubernetes_cluster }}
+      {{ item.0.key }} key '{{ item.1 }}' — create it with
+      `./infratool kubernetes_secret {{ _kubernetes_verb }}
+      {{ kubernetes_cluster }}
       {{ item.0.key.split('/', 1) | join(' ') }} {{ item.1 }}`.
   vars:
+    # Machine-generated entries (the generated category, checked-in or
+    # component-derived) are created with `generate` instead of `set`.
+    _kubernetes_verb: >-
+      {{ 'generate'
+         if item.1 in (_kubernetes_effective_generated[item.0.key] | default([]))
+         else 'set' }}
     _kubernetes_entry: >-
       {{ (kubernetes_secrets[kubernetes_secret_references[item.0.key]] | default({}))
          if item.0.key in kubernetes_secret_references
          else (kubernetes_secrets[item.0.key] | default({})) }}
-  loop: "{{ kubernetes_required_secrets | dict2items | subelements('value') }}"
+  loop: >-
+    {{ _kubernetes_effective_required
+       | combine(_kubernetes_effective_generated, list_merge='append_rp')
+       | dict2items | subelements('value') }}
   loop_control:
     label: "{{ item.0.key }} key '{{ item.1 }}'"
 
@@ -98,6 +109,22 @@
     mode: "0600"
   no_log: true
   diff: false
+
+# Collection-bundled optional manifests ("components", see vars/main.yml),
+# rendered from role templates. no_log/diff off: a component may embed
+# secret values (the smtp relay's env does).
+- name: Deploy component manifests
+  ansible.builtin.template:
+    src: "{{ item.template }}"
+    dest: /var/lib/rancher/k3s/server/manifests/ansible-{{ item.name }}.yml
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+  loop: "{{ _kubernetes_components }}"
+  loop_control:
+    label: "{{ item.name }}"
 
 - name: List deployed manifests
   ansible.builtin.find:
@@ -150,5 +177,8 @@
        | map('basename')
        | reject('in', (_kubernetes_manifest_files | map('basename')
                        | map('regex_replace', '^', 'ansible-') | list)
-                      + ['ansible-vault-secrets.yml'])
+                      + ['ansible-vault-secrets.yml']
+                      + (_kubernetes_components | map(attribute='name')
+                         | map('regex_replace', '^(.*)$', 'ansible-\1.yml')
+                         | list))
        | list }}

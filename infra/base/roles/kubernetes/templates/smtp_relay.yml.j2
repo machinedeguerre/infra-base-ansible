@@ -78,12 +78,18 @@ spec:
             - name: smtp
               containerPort: 587
           readinessProbe:
-            tcpSocket:
-              port: smtp
+            exec:
+              command:
+                - sh
+                - -c
+                - kill -0 "$(cat /var/spool/postfix/pid/master.pid)"
             initialDelaySeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: smtp
+            exec:
+              command:
+                - sh
+                - -c
+                - kill -0 "$(cat /var/spool/postfix/pid/master.pid)"
             initialDelaySeconds: 30
           resources:
             requests:

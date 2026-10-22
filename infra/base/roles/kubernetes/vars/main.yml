@@ -10,7 +10,10 @@
 # Enabled components, as {name, template} entries.
 _kubernetes_components: >-
   {{ ([{'name': 'smtp-relay', 'template': 'smtp_relay.yml.j2'}]
-      if kubernetes_smtp_relay_clients | length > 0 else []) }}
+      if kubernetes_smtp_relay_clients | length > 0 else [])
+     + ([{'name': 'traefik-config', 'template': 'traefik_config.yml.j2'}]
+        if (kubernetes_traefik_https_redirect
+            or kubernetes_traefik_values_extra | length > 0) else []) }}
 
 # Vault entries the enabled components require, split by how a human
 # creates them: required -> `set` (a value from outside), generated ->

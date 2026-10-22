@@ -1,0 +1,19 @@
+# Managed by ansible (infra.base.kubernetes)
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+{% if kubernetes_traefik_https_redirect %}
+    # Redirect ALL plain http to https at the entrypoint:
+    ports:
+      web:
+        redirectTo:
+          port: websecure
+{% endif %}
+{% if kubernetes_traefik_values_extra %}
+{{ kubernetes_traefik_values_extra | indent(4, true) }}
+{% endif %}

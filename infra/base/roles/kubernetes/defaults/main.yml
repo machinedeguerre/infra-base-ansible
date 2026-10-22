@@ -146,6 +146,18 @@ kubernetes_required_secrets: {}
 kubernetes_generated_secrets: {}
 kubernetes_optional_secrets: {}
 
+# --- traefik-config component -------------------------------------------------
+# Redirect all plain http to https at the entrypoint.
+# Set to false ONLY where TLS terminates upstream.
+kubernetes_traefik_https_redirect: true
+
+# Extra raw helm values for the traefik chart (yaml string), e.g.:
+#   kubernetes_traefik_values_extra: |
+#     service:
+#       spec:
+#         externalTrafficPolicy: Local
+kubernetes_traefik_values_extra: ""
+
 # --- smtp-relay component ----------------------------------------------------
 # In-cluster SMTP relay (postfix via boky/postfix), deployed through the
 # manifests mechanism as ansible-smtp-relay.yml. THE SWITCH is the client

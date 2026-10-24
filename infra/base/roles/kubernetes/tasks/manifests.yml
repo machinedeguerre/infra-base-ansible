@@ -76,13 +76,33 @@
 - name: Collect manifest sources
   ansible.builtin.set_fact:
     _kubernetes_manifest_files: >-
-      {{ (lookup('ansible.builtin.fileglob', _kubernetes_src ~ '/*.yml', wantlist=True)
-          + lookup('ansible.builtin.fileglob', _kubernetes_src ~ '/*.yaml', wantlist=True))
-         | sort }}
+      {%- set files = [] -%}
+      {%- for glob in _kubernetes_src_dirs
+            | product(['/*.yml', '/*.yaml']) | map('join') -%}
+        {%- set _ = files.extend(lookup('ansible.builtin.fileglob', glob, wantlist=True)) -%}
+      {%- endfor -%}
+      {{ files | sort }}
   vars:
-    _kubernetes_src: >-
-      {{ kubernetes_manifests_src if kubernetes_manifests_src is match('^/')
-         else playbook_dir ~ '/' ~ kubernetes_manifests_src }}
+    _kubernetes_src_list: >-
+      {{ [kubernetes_manifests_src] if kubernetes_manifests_src is string
+         else kubernetes_manifests_src }}
+    _kubernetes_src_dirs: >-
+      {{ _kubernetes_src_list
+         | map('regex_replace', '^(?!/)', playbook_dir ~ '/')
+         | list }}
+
+# The deployed filename and the prune bookkeeping both use the basename
+# alone, so a basename may only occur in one source dir.
+- name: Manifest basenames must be unique across source dirs
+  ansible.builtin.assert:
+    that:
+      - >-
+        _kubernetes_manifest_files | map('basename') | list | length
+        == _kubernetes_manifest_files | map('basename') | unique | length
+    fail_msg: >-
+      kubernetes_manifests_src dirs contain colliding manifest basenames —
+      every filename must be unique across all source dirs:
+      {{ _kubernetes_manifest_files | join(', ') }}
 
 - name: Deploy manifests
   ansible.builtin.template:

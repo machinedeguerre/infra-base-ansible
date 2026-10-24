@@ -104,7 +104,9 @@ kubernetes_server_config_extra: ""
 kubernetes_registry_mirrors: {}
 
 # Directory with manifest sources, relative to the playbook dir (absolute
-# paths work too). Missing directory simply means no manifests. Manifests
+# paths work too) — or a list of such directories, e.g. a shared dir plus a
+# per-cluster one. Filenames must be unique across all dirs (the basename is
+# the deployed name). Missing directory simply means no manifests. Manifests
 # are cluster-wide: they are deployed on the cluster's first server only.
 kubernetes_manifests_src: "files/k3s-manifests/{{ kubernetes_cluster }}"
 

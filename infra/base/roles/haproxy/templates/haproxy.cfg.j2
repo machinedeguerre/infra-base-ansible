@@ -49,7 +49,10 @@ frontend http_in
     http-request redirect scheme https code 301{% if plain_sites %} unless {{ plain_sites | map(attribute='name') | map('regex_replace', '^', 'host_') | join(' or ') }}{% endif %}
 
 {% endif %}
-{% for site in plain_sites %}
+{% for site in plain_sites if site.redirect is defined %}
+    http-request redirect prefix {{ site.redirect | regex_replace('/+$', '') }} code {{ site.redirect_code | default(302) }} if host_{{ site.name }}
+{% endfor %}
+{% for site in plain_sites if site.redirect is not defined %}
     use_backend be_{{ site.name }} if host_{{ site.name }}
 {% endfor %}
 {% if tls_sites %}
@@ -67,6 +70,12 @@ frontend https_in
 {% for d in site.domains %}
     acl host_{{ site.name }} hdr(host) -i {{ d }}
 {% endfor %}
+{% if site.redirect is defined %}
+    http-request redirect prefix {{ site.redirect | regex_replace('/+$', '') }} code {{ site.redirect_code | default(302) }} if host_{{ site.name }}
+{% endif %}
+{% endfor %}
+
+{% for site in tls_sites if site.redirect is not defined %}
     use_backend be_{{ site.name }} if host_{{ site.name }}
 {% endfor %}
     # No default_backend — unknown Host headers get HAProxy's default 503.
@@ -75,7 +84,7 @@ frontend https_in
 # ---------------------------------------------------------------------------
 # Backends
 # ---------------------------------------------------------------------------
-{% for site in haproxy_sites %}
+{% for site in haproxy_sites if site.redirect is not defined %}
 backend be_{{ site.name }}
     mode http
     balance roundrobin

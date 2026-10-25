@@ -3,6 +3,10 @@
 #   - name:      internal identifier (used for backend names, ACLs)
 #   - domains:   one or more hostnames to match on the Host header
 #   - upstreams: one or more URLs of backend servers (http or https)
+#   - redirect:  alternative to upstreams — redirect all requests to this
+#                URL prefix, preserving path and query string (any trailing
+#                slash on the prefix is stripped). No backend is rendered.
+#   - redirect_code: HTTP status for redirect (default 302)
 #   - cert:      key into wildcard_certs dict (the wildcard domain name,
 #                e.g. "example.com" for *.example.com)
 #   - plain_http: true — serve the site on port 80 without TLS, instead of

@@ -1,16 +1,18 @@
 ---
-- name: Each site must have name, domains, upstreams and either cert or plain_http
+- name: Each site must have name, domains, upstreams or redirect, and either cert or plain_http
   ansible.builtin.assert:
     that:
       - item.name is defined and item.name | length > 0
       - item.domains is defined and (item.domains | length) > 0
-      - item.upstreams is defined and (item.upstreams | length) > 0
+      - (item.upstreams is defined and (item.upstreams | length) > 0) or
+        (item.redirect is defined and item.redirect | length > 0)
+      - not ((item.upstreams is defined) and (item.redirect is defined))
       - (item.cert is defined and item.cert | length > 0) or (item.plain_http | default(false))
       - not ((item.cert is defined) and (item.plain_http | default(false)))
     fail_msg: >-
-      haproxy_sites entry must define name, domains (>=1), upstreams (>=1) and
-      exactly one of: cert (TLS termination on :443) or plain_http: true
-      (served on :80 without TLS).
+      haproxy_sites entry must define name, domains (>=1), exactly one of:
+      upstreams (>=1) or redirect, and exactly one of: cert (TLS termination
+      on :443) or plain_http: true (served on :80 without TLS).
   loop: "{{ haproxy_sites }}"
   loop_control:
     label: "{{ item.name | default('<unnamed>') }}"

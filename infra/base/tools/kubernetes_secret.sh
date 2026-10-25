@@ -17,13 +17,24 @@ set -euo pipefail
 # "<ns>/<name>": "<target-ns>/<target-name>" replicates the target's whole
 # data as a Secret in the referencing namespace. Where a secret is copied is
 # configuration, not a secret — references are edited in that file directly,
-# never stored in the vault. A reference must point at a concrete vault
-# entry: dangling targets, reference chains and a reference name colliding
-# with a vault entry are hard errors (here and in the ansible run).
+# never stored in the vault. A reference must point at a concrete entry:
+# dangling targets, reference chains and a reference name colliding with a
+# vault entry are hard errors (here and in the ansible run).
+#
+# It may also declare DERIVED data keys (`kubernetes_known_hosts_secrets`):
+# "<ns>/<name>": {"<key>": [<inventory host>, ...]} fills that data key with
+# ssh known_hosts lines for the named machines, built from the host keys
+# this repo already manages for them (host_vars/<host>/hostkeys.vault.yml).
+# Nothing is stored in the vault, so a host key rotation flows straight
+# through — and this tool refuses to `set`/`generate`/`get` such a key, with
+# a pointer to the declaration. A data key has exactly one source: derived,
+# vault, or neither. Vault-backed and derived keys may share a secret (the
+# private key from the vault, its known_hosts derived).
 #
 # Usage:
 #   kubernetes_secret set      <cluster> <namespace> <secret> <key> [value|-]
 #   kubernetes_secret generate <cluster> <namespace> <secret> <key>
+#   kubernetes_secret generate-ssh-keypair <priv-cluster> <priv-ns> <priv-secret> <priv-key> <pub-cluster> <pub-ns> <pub-secret> <pub-key> [comment]
 #   kubernetes_secret get      <cluster> <namespace> <secret> <key>
 #   kubernetes_secret copy     <from-cluster> <from-ns> <from-secret> <from-key> <to-cluster> <to-ns> <to-secret> <to-key>
 #   kubernetes_secret move     <from-cluster> <from-ns> <from-secret> <from-key> <to-cluster> <to-ns> <to-secret> <to-key>
@@ -37,6 +48,16 @@ set -euo pipefail
 # `generate` is `set` with a random value (~192 bits), for machine-only
 # secrets no human ever needs to type; it refuses to overwrite an existing
 # key (rotation = deliberate delete first).
+# `generate-ssh-keypair` is the same idea for an ssh key pair (ed25519): the
+# PRIVATE half lands in the first secret and the PUBLIC half in the second,
+# which may be in a DIFFERENT cluster — the usual shape, since the side that
+# must trust the key is rarely the side that uses it. The key material is
+# created in a shredded temp dir and never passes through argv, a shell
+# variable or a file that outlives the command; the human never sees the
+# private half. Both halves are written in one go (no half-provisioned
+# state) and neither destination key is overwritten — rotation is a
+# deliberate delete of both first. The optional comment goes into the
+# public key (default: <priv-secret>@<priv-cluster>).
 # `get` resolves references transparently; `list` shows them alongside the
 # vault entries. `delete` removes one key, or the whole secret when key is
 # omitted; a secret still pointed at by a reference cannot be deleted.
@@ -115,11 +136,19 @@ TMP_VALUE="$(mktemp)"
 TMP_DST="$(mktemp)"
 TMP_CONTRACT="$(mktemp)"
 TMP_CONTRACT_DST="$(mktemp)"
+# ssh-keygen needs to WRITE two files itself (and refuses to overwrite), so
+# the key pair gets a private dir instead of mktemp files. Shredded below.
+TMP_SSHDIR="$(mktemp -d)"
 cleanup() {
   shred -u "$TMP_PLAIN" "$TMP_VALUE" "$TMP_DST" \
     "$TMP_CONTRACT" "$TMP_CONTRACT_DST" 2>/dev/null \
     || rm -f "$TMP_PLAIN" "$TMP_VALUE" "$TMP_DST" \
       "$TMP_CONTRACT" "$TMP_CONTRACT_DST"
+  if [ -d "$TMP_SSHDIR" ]; then
+    find "$TMP_SSHDIR" -type f -exec shred -u {} + 2>/dev/null \
+      || rm -f "$TMP_SSHDIR"/*
+    rmdir "$TMP_SSHDIR" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
@@ -207,7 +236,8 @@ def load_contract(path):
     with open(path) as f:
         data = json.load(f)
     return {k: (data.get(k) or {}) for k in
-            ("required", "generated", "optional", "references", "vault")}
+            ("required", "generated", "optional", "references",
+             "known_hosts", "vault")}
 
 contract = load_contract(os.environ["KS_CONTRACT"])
 
@@ -221,6 +251,23 @@ def required_keys(ref, c=None):
     # generated entries are required too — they just carry a different verb.
     c = c or contract
     return set(c["required"].get(ref) or []) | set(c["generated"].get(ref) or [])
+
+# DERIVED keys (kubernetes_known_hosts_secrets in the declared file): built
+# by the role from the host keys this repo already manages, never stored in
+# the vault. This tool therefore refuses to write them and cannot read them
+# back — it would be lying about where the value comes from.
+def derived_keys(ref, c=None):
+    c = c or contract
+    return set(c["known_hosts"].get(ref) or [])
+
+def refuse_if_derived(ref, key, c=None, path=None, cluster_name=None):
+    if key in derived_keys(ref, c):
+        sys.exit(f"ERROR: {ref} key '{key}' (cluster "
+                 f"{cluster_name or cluster}) is DERIVED from host keys "
+                 "(kubernetes_known_hosts_secrets in "
+                 f"{os.path.relpath(path or declared_path)}) — the role "
+                 "renders it at deploy time, so there is nothing to store "
+                 "here. Change the declaration instead.")
 
 # References live in the checked-in declared file, never in the vault:
 # "<ns>/<name>" -> "<target-ns>/<target-name>" replicates the target's data
@@ -255,6 +302,7 @@ if op == "set":
         sys.exit(f"ERROR: {ref} is declared as a reference to "
                  f"{references[ref]} in {os.path.relpath(declared_path)} — "
                  "set the key on the target instead, or remove the reference")
+    refuse_if_derived(ref, key)
     secrets.setdefault(ref, {})[key] = value
     save_secrets(secrets)
     if key not in declared_keys(ref):
@@ -269,6 +317,7 @@ elif op == "generate":
         sys.exit(f"ERROR: {ref} is declared as a reference to "
                  f"{references[ref]} in {os.path.relpath(declared_path)} — "
                  "generate on the target instead, or remove the reference")
+    refuse_if_derived(ref, key)
     if key in secrets.get(ref, {}):
         sys.exit(f"ERROR: {ref} key '{key}' already exists — a generated "
                  "secret is never rotated by accident; delete it first if "
@@ -281,12 +330,84 @@ elif op == "generate":
               f"{os.path.relpath(declared_path)} (required or optional), or "
               "the Reports step will flag it as stale.", file=sys.stderr)
 
+elif op == "generate-ssh-keypair":
+    # The two halves of one ed25519 key pair, written in a single pass:
+    # the private one here, the public one in (possibly) another cluster's
+    # vault. ssh-keygen has already created them in the shredded temp dir.
+    ns, name, key, pns, pname, pkey = args
+    ref = f"{ns}/{name}"
+    pref = f"{pns}/{pname}"
+    same_vault = os.environ.get("KS_SAME_VAULT") == "1"
+    pub_cluster = os.environ["KS_CLUSTER_DST"]
+    pub_declared_path = os.environ["KS_DECLARED_DST"]
+    if same_vault:
+        pub_secrets = secrets
+        pub_contract = contract
+    else:
+        pub_secrets = load_secrets(os.environ["KS_PLAIN_DST"])
+        pub_contract = load_contract(os.environ["KS_CONTRACT_DST"])
+    pub_references = pub_contract["references"]
+
+    if same_vault and ref == pref and key == pkey:
+        sys.exit("ERROR: the private and public halves would overwrite each "
+                 "other — give them different secrets or keys")
+    for entry, refs, path, cluster_name in (
+            (ref, references, declared_path, cluster),
+            (pref, pub_references, pub_declared_path, pub_cluster)):
+        if entry in refs:
+            sys.exit(f"ERROR: {entry} (cluster {cluster_name}) is declared as "
+                     f"a reference to {refs[entry]} in "
+                     f"{os.path.relpath(path)} — write to the target "
+                     "instead, or remove the reference")
+    refuse_if_derived(ref, key)
+    refuse_if_derived(pref, pkey, pub_contract, pub_declared_path, pub_cluster)
+    # Neither half is overwritten: a key pair is rotated deliberately, by
+    # deleting BOTH halves first (a new private key with the old public one
+    # left in place would lock the tunnel out).
+    if key in secrets.get(ref, {}):
+        sys.exit(f"ERROR: {ref} key '{key}' already exists in cluster "
+                 f"{cluster} — delete both halves first to rotate the pair")
+    if pkey in pub_secrets.get(pref, {}):
+        sys.exit(f"ERROR: {pref} key '{pkey}' already exists in cluster "
+                 f"{pub_cluster} — delete both halves first to rotate the pair")
+
+    ssh_dir = os.environ["KS_SSH_DIR"]
+    with open(os.path.join(ssh_dir, "key")) as f:
+        private = f.read()
+    with open(os.path.join(ssh_dir, "key.pub")) as f:
+        public = f.read()
+    if not private or not public:
+        sys.exit("ERROR: ssh-keygen produced an empty key pair")
+
+    secrets.setdefault(ref, {})[key] = private
+    pub_secrets.setdefault(pref, {})[pkey] = public
+    if same_vault:
+        save_secrets(secrets)
+    else:
+        # Public half first: if the private encrypt then failed, the pair is
+        # recoverable (delete the public half and run again) rather than the
+        # private key being the only thing that survived.
+        save_secrets(pub_secrets, os.environ["KS_PLAIN_DST"], pub_cluster)
+        save_secrets(secrets)
+    print(f"Generated ssh key pair: private -> {ref} key '{key}' "
+          f"(cluster {cluster}), public -> {pref} key '{pkey}' "
+          f"(cluster {pub_cluster})")
+    print(f"Public key: {public.strip()}")
+    for entry, data_key, c, path in (
+            (ref, key, contract, declared_path),
+            (pref, pkey, pub_contract, pub_declared_path)):
+        if data_key not in declared_keys(entry, c):
+            print(f"WARNING: {entry} key '{data_key}' is not declared — add "
+                  f"it to {os.path.relpath(path)} (required or optional), or "
+                  "the Reports step will flag it as stale.", file=sys.stderr)
+
 elif op == "get":
     ns, name, key = args
     ref = f"{ns}/{name}"
     if ref in references and references[ref] not in secrets:
         sys.exit(f"ERROR: {ref} is a reference to {references[ref]}, which "
                  "is not in the vault (broken reference)")
+    refuse_if_derived(ref, key)
     if ref not in references and ref not in secrets:
         sys.exit(f"ERROR: {ref} not found (vault or references)")
     data = resolved(secrets, references, ref)
@@ -376,10 +497,14 @@ elif op in ("copy", "move"):
               "or the Reports step will flag it as stale.", file=sys.stderr)
 
 elif op == "list":
-    if not secrets and not references:
+    known = contract["known_hosts"]
+    if not secrets and not references and not known:
         print("(no secrets in vault)")
     for ref in sorted(secrets):
         print(f"{ref}: {', '.join(sorted(secrets[ref]))}")
+    for ref in sorted(known):
+        print(f"{ref}: {', '.join(sorted(known[ref] or []))} "
+              "(derived: known_hosts)")
     for ref in sorted(references):
         print(f"{ref} -> {references[ref]} (reference)")
 
@@ -429,12 +554,14 @@ elif op == "check":
     c_generated = contract["generated"]
     c_optional = contract["optional"]
     c_references = contract["references"]
+    c_known = contract["known_hosts"]  # derived, never in the vault
     c_vault = contract["vault"]  # "<ns>/<name>" -> [key, ...]
     problems = 0
 
     def vault_keys(ref):
         target = c_references.get(ref)
-        return set(c_vault.get(target if target is not None else ref) or [])
+        ref = target if target is not None else ref
+        return set(c_vault.get(ref) or []) | set(c_known.get(ref) or [])
 
     for ref in sorted(c_references):
         target = c_references[ref]
@@ -442,15 +569,41 @@ elif op == "check":
             problems += 1
             print(f"COLLIDING reference: {ref} -> {target}, but {ref} is "
                   "also a concrete vault entry — remove one of them")
+        if ref in c_known:
+            problems += 1
+            print(f"COLLIDING reference: {ref} -> {target}, but {ref} also "
+                  "declares derived known_hosts keys — remove one of them")
         if target in c_references:
             problems += 1
             print(f"INVALID reference: {ref} -> {target}, which is itself a "
                   f"reference (to {c_references[target]}) — references must "
-                  "point at a concrete vault secret")
-        elif target not in c_vault:
+                  "point at a concrete secret")
+        elif target not in c_vault and target not in c_known:
             problems += 1
-            print(f"BROKEN reference: {ref} -> {target} (target not in the "
-                  "vault) — the ansible run will refuse to deploy manifests")
+            print(f"BROKEN reference: {ref} -> {target} (target exists "
+                  "neither in the vault nor as a derived entry) — the "
+                  "ansible run will refuse to deploy manifests")
+
+    # A data key has exactly one source. Declaring a derived key in the
+    # contract too (or leaving a stored copy in the vault) is what the
+    # ansible run fails on — name it here, where it is cheap to find.
+    for ref in sorted(c_known):
+        derived = set(c_known[ref] or [])
+        for key in sorted(derived & set(c_vault.get(ref) or [])):
+            problems += 1
+            print(f"TWO SOURCES: {ref} key '{key}' is derived "
+                  "(kubernetes_known_hosts_secrets) but also stored in the "
+                  "vault\n  -> remove the stored copy: ./infratool "
+                  f"kubernetes_secret delete {cluster} "
+                  f"{ref.split('/', 1)[0]} {ref.split('/', 1)[1]} {key}")
+        for key in sorted(derived & (set(c_required.get(ref) or [])
+                                     | set(c_generated.get(ref) or [])
+                                     | set(c_optional.get(ref) or []))):
+            problems += 1
+            print(f"TWO SOURCES: {ref} key '{key}' is derived "
+                  "(kubernetes_known_hosts_secrets) but also declared as "
+                  "required/generated/optional\n  -> remove it from the "
+                  f"contract in {os.path.relpath(declared_path)}")
     for ref in sorted(set(c_required) | set(c_generated)):
         ns_name = ref.split("/", 1)
         keys = set(c_required.get(ref) or []) | set(c_generated.get(ref) or [])
@@ -461,9 +614,12 @@ elif op == "check":
                 print(f"MISSING required: {ref} key '{key}'\n"
                       f"  -> ./infratool kubernetes_secret {verb} {cluster} "
                       f"{ns_name[0]} {ns_name[1]} {key}")
+    # Derived keys count as declared here, so a stored copy of one is
+    # reported as TWO SOURCES above and not a second time as stale.
     declared = {ref: set(c_required.get(ref) or []) | set(c_generated.get(ref) or [])
-                     | set(c_optional.get(ref) or [])
-                for ref in set(c_required) | set(c_generated) | set(c_optional)}
+                     | set(c_optional.get(ref) or []) | set(c_known.get(ref) or [])
+                for ref in set(c_required) | set(c_generated) | set(c_optional)
+                            | set(c_known)}
     for ref in sorted(c_vault):
         ns_name = ref.split("/", 1)
         for key in sorted(c_vault[ref] or []):
@@ -523,6 +679,51 @@ case "$ACTION" in
     validate_ns_name_key "$3" "$4" "$5"
     run_py generate "$3" "$4" "$5"
     encrypt_back
+    ;;
+  generate-ssh-keypair)
+    [ "$#" -ge 9 ] && [ "$#" -le 10 ] || usage
+    require_cmd ssh-keygen
+    validate_ns_name_key "$3" "$4" "$5"
+    PUB_CLUSTER="$6"
+    if ! printf '%s' "$PUB_CLUSTER" | grep -Eq '^[a-z0-9-]+$'; then
+      echo "ERROR: Cluster name must match ^[a-z0-9-]+$: $PUB_CLUSTER" >&2
+      exit 1
+    fi
+    PUB_CLUSTER_DIR="$PROJECT_ROOT/inventory/group_vars/k3s_${PUB_CLUSTER}"
+    if [ ! -d "$PUB_CLUSTER_DIR" ]; then
+      echo "ERROR: No such cluster group_vars directory: $PUB_CLUSTER_DIR" >&2
+      exit 1
+    fi
+    validate_ns_name_key "$7" "$8" "$9"
+    # ed25519: one shape, no size knob to get wrong. The pair is created in
+    # the shredded temp dir and read from there by python — the material
+    # never reaches argv or a shell variable.
+    ssh-keygen -q -t ed25519 -N '' -C "${10:-$4@$CLUSTER}" -f "$TMP_SSHDIR/key"
+    export KS_SSH_DIR="$TMP_SSHDIR"
+    export KS_CLUSTER_DST="$PUB_CLUSTER"
+    export KS_DECLARED_DST="$PUB_CLUSTER_DIR/kubernetes_secrets_declared.yml"
+    # No source-vault requirement (unlike copy): a key pair may well be the
+    # first secret a cluster gets.
+    if [ "$CLUSTER" = "$PUB_CLUSTER" ]; then
+      # One vault: python mutates the single plaintext, re-encrypted once.
+      export KS_SAME_VAULT=1 KS_PLAIN_DST="$TMP_PLAIN"
+      run_py "$ACTION" "$3" "$4" "$5" "$7" "$8" "$9"
+      encrypt_back
+    else
+      fetch_contract "$PUB_CLUSTER" "$TMP_CONTRACT_DST"
+      PUB_VAULT_FILE="$PUB_CLUSTER_DIR/kubernetes_secrets.vault.yml"
+      if [ -f "$PUB_VAULT_FILE" ]; then
+        ansible-vault view "$PUB_VAULT_FILE" > "$TMP_DST"
+      fi
+      export KS_SAME_VAULT=0 KS_PLAIN_DST="$TMP_DST" \
+        KS_CONTRACT_DST="$TMP_CONTRACT_DST"
+      run_py "$ACTION" "$3" "$4" "$5" "$7" "$8" "$9"
+      # Public half first: a failure after it leaves a recoverable state
+      # (delete the public half and run again), not a private key whose
+      # public counterpart was lost.
+      encrypt_back "$TMP_DST" "$PUB_VAULT_FILE"
+      encrypt_back
+    fi
     ;;
   get)
     [ "$#" -eq 5 ] || usage

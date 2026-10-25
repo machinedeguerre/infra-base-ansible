@@ -17,18 +17,65 @@
   ansible.builtin.assert:
     that:
       - item.key not in kubernetes_secrets
+      - item.key not in kubernetes_known_hosts_secrets
       - item.value not in kubernetes_secret_references
-      - item.value in kubernetes_secrets
+      - item.value in kubernetes_secrets or item.value in kubernetes_known_hosts_secrets
     fail_msg: >-
       kubernetes_secret_references entry {{ item.key }} -> {{ item.value }}
       is invalid: {{ 'the reference name collides with a concrete vault
       entry — remove one of them' if item.key in kubernetes_secrets
+      else ('the reference name collides with a derived known_hosts entry —
+      remove one of them' if item.key in kubernetes_known_hosts_secrets
       else ('the target is itself a reference — references must point at a
-      concrete vault secret' if item.value in kubernetes_secret_references
-      else 'the target does not exist in the vault') }}.
+      concrete secret' if item.value in kubernetes_secret_references
+      else 'the target exists neither in the vault nor as a derived
+      known_hosts entry')) }}.
   loop: "{{ kubernetes_secret_references | dict2items }}"
   loop_control:
     label: "{{ item.key }} -> {{ item.value }}"
+
+# Derived known_hosts keys (kubernetes_known_hosts_secrets): built from the
+# host keys this repo manages for the named machines. Two ways to get it
+# wrong, both caught here rather than as an empty file inside a pod:
+# a data key with two sources, and a host without usable host keys.
+- name: A data key may have only one source (vault, contract or known_hosts)
+  ansible.builtin.assert:
+    that:
+      - (kubernetes_secrets.get(item.key) or {}).keys() | list
+        | intersect(item.value) | length == 0
+      - (_kubernetes_effective_required.get(item.key) or [])
+        | union(_kubernetes_effective_generated.get(item.key) or [])
+        | union(kubernetes_optional_secrets.get(item.key) or [])
+        | intersect(item.value) | length == 0
+    fail_msg: >-
+      kubernetes_known_hosts_secrets {{ item.key }} declares key(s)
+      {{ item.value | join(', ') }} that also
+      {{ 'exist in the vault — delete them there, the derived value wins
+      nothing by being stored twice'
+         if ((kubernetes_secrets.get(item.key) or {}).keys() | list
+             | intersect(item.value) | length > 0)
+         else 'appear in the required/generated/optional contract — a derived
+      key is satisfied by this declaration alone, so remove it there' }}.
+  loop: "{{ _kubernetes_effective_known_hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: known_hosts hosts must exist in the inventory with host keys
+  ansible.builtin.assert:
+    that:
+      - item.host in hostvars and
+        (hostvars[item.host].sshd_host_keys | default([])) | length > 0
+    fail_msg: >-
+      kubernetes_known_hosts_secrets {{ item.ref }} key '{{ item.key }}'
+      names host {{ item.host }}, which
+      {{ 'is not in the inventory' if item.host not in hostvars
+         else 'has no sshd_host_keys in its vault (host_vars/'
+              ~ item.host ~ '/hostkeys.vault.yml — generate them with
+              `./infratool generate_sshd_hostkeys ' ~ item.host ~ '`)' }} —
+      the Secret would get an empty known_hosts file.
+  loop: "{{ _kubernetes_known_hosts_hosts }}"
+  loop_control:
+    label: "{{ item.ref }} key '{{ item.key }}' -> {{ item.host }}"
 
 # Fail before anything is deployed when a required secret (the checked-in
 # contract, kubernetes_required_secrets, plus what enabled components derive

@@ -117,7 +117,8 @@ kubernetes_manifests_src: "files/k3s-manifests/{{ kubernetes_cluster }}"
 # empty and k3s deletes every Secret it created). Never set this in
 # plaintext — it lives vault-encrypted in
 # inventory/group_vars/k3s_<cluster>/kubernetes_secrets.vault.yml, managed
-# with `./infratool kubernetes_secret set|get|copy|move|list|delete|check ...`.
+# with `./infratool kubernetes_secret
+# set|generate|generate-ssh-keypair|get|copy|move|list|delete|check ...`.
 # The vault holds concrete entries only — replication into other namespaces
 # is declared in checked-in yml via kubernetes_secret_references below.
 # Namespaces are NOT created here (deliberately: pruning this manifest must
@@ -137,6 +138,11 @@ kubernetes_secrets: {}
 # generated: exactly like required, but the value is machine-generated with
 #   `./infratool kubernetes_secret generate ...` (random, never typed or
 #   seen by a human) — used for pure machine-to-machine credentials.
+#   An ssh key pair is the same kind of machine-only credential but comes in
+#   two halves, so it is created with `generate-ssh-keypair` instead (the
+#   public half may land in another cluster's vault) and declared as
+#   required: `check` then suggests the generic `set` for a missing half —
+#   note the real command next to the declaration.
 # Example:
 #   kubernetes_required_secrets:
 #     "forgejo/smtp-credentials": [username, password]
@@ -147,6 +153,32 @@ kubernetes_secrets: {}
 kubernetes_required_secrets: {}
 kubernetes_generated_secrets: {}
 kubernetes_optional_secrets: {}
+
+# DERIVED data keys: ssh known_hosts built from the host keys this repo
+# already manages (host_vars/<host>/hostkeys.vault.yml -> sshd_host_keys,
+# the same material the sshd role installs on those machines). The value is
+# rendered at deploy time and never stored in the vault, so a host key
+# rotation flows straight through — and a pod that tunnels somewhere can
+# verify the host without anyone running ssh-keyscan and pasting the result.
+# Where a key comes from is configuration, not a secret: declared in the
+# checked-in yml next to the contract, like kubernetes_secret_references.
+#
+#   kubernetes_known_hosts_secrets:
+#     "atom/sync-tunnel":
+#       known-hosts: [jango]              # inventory host names
+#     "ci/deploy-keys":
+#       known-hosts:
+#         - grogu                         # short form: ansible_host + name
+#         - host: jango                   # long form: explicit patterns
+#           addresses: [172.25.60.10, jango.example.org]
+#
+# One line per host key per host, with the addresses as the host pattern
+# (short form: the host's ansible_host plus its inventory name). The keys
+# may share a secret with vault-backed keys — the sync tunnel's private key
+# comes from the vault, its known_hosts from here — but a data key can only
+# have ONE source (asserted before deploy), and the named hosts must exist
+# in the inventory with host keys in their vault.
+kubernetes_known_hosts_secrets: {}
 
 # --- traefik-config component -------------------------------------------------
 # Redirect all plain http to https at the entrypoint.

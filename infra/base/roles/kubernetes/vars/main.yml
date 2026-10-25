@@ -40,3 +40,28 @@ _kubernetes_effective_required: >-
 _kubernetes_effective_generated: >-
   {{ kubernetes_generated_secrets
      | combine(_kubernetes_component_generated, list_merge='append_rp') }}
+
+# The DERIVED data keys (kubernetes_known_hosts_secrets, see defaults), in
+# the same "<ns>/<name>" -> [key, ...] shape as the contract above: names
+# only, so manifests.yml can assert the sources do not overlap, the report
+# can treat them as declared and the tooling can refuse to write them. The
+# VALUES are built where they are used (vault_secrets.yml.j2) — a derived
+# key is never stored anywhere.
+_kubernetes_effective_known_hosts: >-
+  {{ dict(kubernetes_known_hosts_secrets.keys()
+          | zip(kubernetes_known_hosts_secrets.values() | map('list'))) }}
+
+# Every (host, declared-in) pair the known_hosts keys name — the assertion
+# in manifests.yml walks it to fail early on a host that is missing from
+# the inventory or has no host keys in its vault.
+_kubernetes_known_hosts_hosts: >-
+  {%- set out = [] -%}
+  {%- for ref, keys in kubernetes_known_hosts_secrets.items() -%}
+  {%-   for key, entries in keys.items() -%}
+  {%-     for entry in entries -%}
+  {%-       set _ = out.append({'ref': ref, 'key': key,
+                                'host': (entry.host if entry is mapping else entry)}) -%}
+  {%-     endfor -%}
+  {%-   endfor -%}
+  {%- endfor -%}
+  {{ out }}

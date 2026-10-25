@@ -1,13 +1,51 @@
 ---
-- name: "Resolve key file path for {{ _user_mgmt_user.username }}"
+# One user's authorized_keys, from two sources that may be combined:
+#
+#   authorized_keys_src  a public keys FILE in the consumer's repo
+#   authorized_keys      INLINE entries, so a key can come from a variable
+#                        (a vaulted secret, another host's fact) instead of
+#                        being copied into a file by hand
+#
+# Inline entries are either a full authorized_keys line or a mapping
+# {key, options}. Keys are trimmed: a value read out of a vault or a file
+# normally carries a trailing newline.
+- name: "Collect authorized keys for {{ _user_mgmt_user.username }}"
   ansible.builtin.set_fact:
-    _user_mgmt_key_file: >-
-      {%- if _user_mgmt_user.authorized_keys_src is match('^/') -%}
-        {{ _user_mgmt_user.authorized_keys_src }}
-      {%- else -%}
-        {{ playbook_dir }}/{{ _user_mgmt_user.authorized_keys_src }}
+    _user_mgmt_authorized_lines: >-
+      {%- set lines = [] -%}
+      {%- if _user_mgmt_user.authorized_keys_src is defined -%}
+      {%-   set src = _user_mgmt_user.authorized_keys_src -%}
+      {%-   set path = src if src is match('^/') else playbook_dir ~ '/' ~ src -%}
+      {%-   for line in lookup('ansible.builtin.file', path).splitlines() -%}
+      {%-     if line | trim | length > 0 and not line | trim is match('^#') -%}
+      {%-       set _ = lines.append(line | trim) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
       {%- endif -%}
+      {%- for entry in _user_mgmt_user.authorized_keys | default([]) -%}
+      {%-   set key = (entry.key if entry is mapping else entry) | trim -%}
+      {%-   set options = (entry.options | default('') if entry is mapping else '') | trim -%}
+      {%-   set _ = lines.append((options ~ ' ' if options | length > 0 else '') ~ key) -%}
+      {%- endfor -%}
+      {{ lines }}
 
+# An exclusive file is the whole truth for the account, so an empty list
+# would quietly remove every key — nearly always a variable that resolved to
+# nothing (a secret that does not exist yet), never the intent.
+- name: "Exclusive authorized_keys must not be empty ({{ _user_mgmt_user.username }})"
+  ansible.builtin.assert:
+    that:
+      - _user_mgmt_authorized_lines | length > 0
+    fail_msg: >-
+      authorized_keys_exclusive is set for {{ _user_mgmt_user.username }}, but
+      the declared keys resolved to nothing — writing the file would remove
+      every key and lock the account out. Check authorized_keys /
+      authorized_keys_src (a variable that is empty, or a secret that does
+      not exist yet?).
+  when: _user_mgmt_user.authorized_keys_exclusive | default(false) | bool
+
+# Default: additive, one line at a time — the file may well hold keys this
+# role knows nothing about.
 - name: "Ensure each authorized key for {{ _user_mgmt_user.username }}"
   ansible.builtin.lineinfile:
     path: "{{ user_mgmt_home_base }}/{{ _user_mgmt_user.username }}/.ssh/authorized_keys"
@@ -17,10 +55,18 @@
     owner: "{{ _user_mgmt_user.username }}"
     group: "{{ _user_mgmt_user.username }}"
     mode: "0600"
-  loop: >-
-    {{ lookup('file', _user_mgmt_key_file | trim).splitlines()
-       | reject('match', '^\s*$')
-       | reject('match', '^\s*#')
-       | list }}
+  loop: "{{ _user_mgmt_authorized_lines }}"
+  when: not (_user_mgmt_user.authorized_keys_exclusive | default(false) | bool)
   loop_control:
     label: "{{ _user_mgmt_user.username }}: {{ item[:50] }}..."
+
+# Opt-in: the declared keys ARE the file, so a key that is no longer
+# declared (a rotated-out one) disappears instead of staying trusted.
+- name: "Write authorized_keys for {{ _user_mgmt_user.username }} (exclusive)"
+  ansible.builtin.copy:
+    content: "{{ _user_mgmt_authorized_lines | join('\n') }}\n"
+    dest: "{{ user_mgmt_home_base }}/{{ _user_mgmt_user.username }}/.ssh/authorized_keys"
+    owner: "{{ _user_mgmt_user.username }}"
+    group: "{{ _user_mgmt_user.username }}"
+    mode: "0600"
+  when: _user_mgmt_user.authorized_keys_exclusive | default(false) | bool

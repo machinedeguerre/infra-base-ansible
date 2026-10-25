@@ -12,6 +12,21 @@ user_mgmt_default_passwordless_sudo: false
 # Optional: uid (int) – if set the user and its primary group are created.
 # Optional: authorized_keys_src (str) – path to a public keys file
 #           (absolute, or relative to playbook_dir).
+# Optional: authorized_keys (list) – INLINE keys, so a key can come straight
+#           from a variable (a vaulted secret, another host's fact) instead of
+#           being copied into a file by hand. Each item is either a full
+#           authorized_keys line, or a mapping {key, options} where options is
+#           the comma-separated prefix (restrict, permitopen=…, command=…).
+#           Combines with authorized_keys_src; keys are trimmed, so a value
+#           with a trailing newline is fine.
+# Optional: authorized_keys_exclusive (bool, default false) – OWN the file
+#           instead of only adding lines to it: it is written from the
+#           declared keys alone, so a key that is no longer declared is
+#           removed. Rotation without a manual cleanup on the host; the cost
+#           is that keys added on the machine by hand disappear, which is why
+#           it is opt-in and best kept to machine accounts. The role refuses
+#           to write an EMPTY exclusive file (that would lock the account out
+#           silently when a variable resolves to nothing).
 # Example:
 #   user_mgmt_users:
 #     - username: "deploy"
@@ -19,6 +34,14 @@ user_mgmt_default_passwordless_sudo: false
 #       sudo: false
 #       passwordless_sudo: false
 #       authorized_keys_src: "files/pubkeys/deploy.pubkeys"
+#     - username: "tunnel"
+#       uid: 1200
+#       sudo: false
+#       passwordless_sudo: false
+#       authorized_keys_exclusive: true
+#       authorized_keys:
+#         - options: 'restrict,permitopen="127.0.0.1:3306"'
+#           key: "{{ kubernetes_secrets['ns/tunnel']['public-key'] }}"
 user_mgmt_users: []
 
 user_mgmt_shell: "/bin/bash"

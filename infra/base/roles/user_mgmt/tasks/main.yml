@@ -22,7 +22,9 @@
   loop: "{{ user_mgmt_all_users }}"
   loop_control:
     loop_var: _user_mgmt_user
-  when: _user_mgmt_user.authorized_keys_src is defined
+  when: >-
+    _user_mgmt_user.authorized_keys_src is defined
+    or _user_mgmt_user.authorized_keys is defined
 
 - name: Configure sudo
   ansible.builtin.import_tasks: sudo.yml

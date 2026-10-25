@@ -7,6 +7,13 @@
       - item.sudo is boolean
       - item.passwordless_sudo is boolean
       - item.authorized_keys_src is not defined or item.authorized_keys_src is string
+      - item.authorized_keys is not defined
+        or (item.authorized_keys is not string and item.authorized_keys is sequence)
+      - item.authorized_keys_exclusive is not defined
+        or item.authorized_keys_exclusive is boolean
+      - not (item.authorized_keys_exclusive | default(false))
+        or item.authorized_keys_src is defined
+        or (item.authorized_keys | default([]) | length > 0)
       - (not item.passwordless_sudo) or item.sudo
     fail_msg: "Invalid user definition: {{ item }}"
   loop: "{{ user_mgmt_all_users }}"
